@@ -18,6 +18,8 @@ Actual two-PC Steam delivery, ordinary campaign transitions and menus, save/resu
 
 Current source has broader area, progress and mode checks. Own-code mode/progress/profile fixtures pass. Recent failed gates, corrections and the scenario-10 pause result are recorded in [Status](docs/STATUS.md#current-source-and-recent-failures).
 
+The next multi-area regression (**run 033**) failed on both clients during native startup, before gameplay. Startup reliability is an open blocker; the earlier scenario-10 pause gate remains a scoped pass. See [Status](docs/STATUS.md#current-source-and-recent-failures).
+
 ## How far along?
 
 **40 / 100 toward a first playable release**, based on a weighted engineering assessment. This is a judgement about milestones, not a measured coverage percentage or a delivery-date forecast. The missing campaign, save and remote-session work is substantial. The [score breakdown](docs/STATUS.md#progress-estimate) and [roadmap](docs/ROADMAP.md) explain what remains.

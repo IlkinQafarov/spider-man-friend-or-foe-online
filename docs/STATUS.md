@@ -35,6 +35,8 @@ Current source is **scenario 10 / wire protocol 3**. The selected-state sample n
 
 The source-publication helper has produced an independently scanned, allowlisted source snapshot. It prepares files and an inventory; it does not upload anything or certify arbitrary future contributions.
 
+Run **033**, using scenario 10 with the intended 7,200-tick / three-area options, failed on both clients during startup with native access violations, before network readiness or gameplay. No current-source multi-area pass is credited. Static analysis found an unbounded native keyboard-name lookup; layout-dependent internal names are a possible trigger, but the failed logs do not establish the requested name, descriptor count or layout. A bounded guard and canonical internal naming are being investigated. This remains an unresolved startup limitation.
+
 ## Implemented, with incomplete validation
 
 The code includes two-peer input exchange, native player routing, fixed gameplay timing, selected state checks, complete-pack language verification, host/join UI, an x64 native relay and ordered user-stop handling. The real-input path accepts keyboard/controller providers, but physical device usability remains untested. The packaging helper creates an explicit asset-free file set, but no release package is offered here.
