@@ -19,7 +19,7 @@ These summarize completed maintainer checks. Raw evidence stays private because 
 
 ## Current source and recent failures
 
-Current source is **scenario 10 / wire protocol 3**. The selected-state sample now includes the full area path, campaign flags, actual mode, previous mode only while pause/NIS restoration uses it, and pause owner only while paused. Mode ranges are guarded. This broadens detection; it is not a complete world-state oracle.
+Current source is **scenario 11 / wire protocol 3**. The selected-state sample includes the full area path, campaign flags, actual mode, previous mode only while pause/NIS restoration uses it, and pause owner only while paused. Mode ranges are guarded. This broadens detection; it is not a complete world-state oracle.
 
 | Check | Observed result | Interpretation |
 | --- | --- | --- |
@@ -35,7 +35,20 @@ Current source is **scenario 10 / wire protocol 3**. The selected-state sample n
 
 The source-publication helper has produced an independently scanned, allowlisted source snapshot. It prepares files and an inventory; it does not upload anything or certify arbitrary future contributions.
 
-Run **033**, using scenario 10 with the intended 7,200-tick / three-area options, failed on both clients during startup with native access violations, before network readiness or gameplay. No current-source multi-area pass is credited. Static analysis found an unbounded native keyboard-name lookup; layout-dependent internal names are a possible trigger, but the failed logs do not establish the requested name, descriptor count or layout. A bounded guard and canonical internal naming are being investigated. This remains an unresolved startup limitation.
+Run **033**, using scenario 10 with the intended 7,200-tick / three-area options, failed on both clients during startup with native access violations, before network readiness or gameplay. No coverage is credited to that run. Static analysis found an unbounded native keyboard-name lookup; layout-dependent internal names are a possible trigger, but the failed logs do not establish the requested name, descriptor count or layout.
+
+Scenario 11 bounds that lookup, reads native strings safely and rejects missing/malformed bindings with nonzero exit 86 instead of substituting a key. A guarded initializer call selects and validates an **already-loaded standard US layout** for internal names only. It neither loads nor activates layouts, and preserves separate native display labels. Missing supported layout is an explicit failure. The pure key-name fixture passes, including two caught mutation twins; complete configured-binding or hardware coverage is not claimed.
+
+| New check | Observed result | Practical limit |
+| --- | --- | --- |
+| Run 034, scenario 11 | 7,200 consecutive selected-state ticks matched; three fixture-driven area transitions; English/Russian, keyboard/controller fixtures, jitter and mock relay | Same-machine controlled scenario; ordinary campaign travel remains unverified |
+| Completion of run 034 | All games, launchers and relays exited 0; each relay sent/received 921,808 bytes, discarded 0; no timeout or forced cleanup | Normal completion of that bounded gate |
+| Run 035, scenario 11 | 3,600 consecutive selected-state ticks matched; movement, damage, hostile defeat; pause at 243, frozen 178 frames, resume at 421, fixture complete at 430 | Same-machine combat/pause fixture, not campaign QA |
+| Completion of run 035 | All games, launchers and relays exited 0; each relay sent/received 461,008 bytes, discarded 0; no timeout or forced cleanup | Normal completion of that bounded gate |
+
+Both new runs reported actual and canonical US layout, with 102 keyboard descriptors during binding lookup. They support the guarded path without reproducing the original layout/target from run 033. Its precise trigger and broader startup/layout compatibility remain unconfirmed.
+
+Run **036**, also scenario 11, passed the quiet fixture-disabled gameplay lifecycle: at least 361 common ticks, four sparse observations, no diagnostic game captures, host-only owned-window close, ordered peer stop and normal exits. The pre-game movie/bootstrap route was slow: readiness was still pending at 212 seconds and the gate completed at about 221 seconds within its 240-second bound. This is startup/idle/shutdown evidence, not a physical-input or retail-campaign pass. It uses the controlled research bootstrap.
 
 ## Implemented, with incomplete validation
 

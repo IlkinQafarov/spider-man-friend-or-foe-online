@@ -11,4 +11,6 @@ if errorlevel 1 exit /b 1
 cl /nologo /W4 /O2 /MT /EHsc /std:c++17 progress_selftest.cpp /link /OUT:native-progress-selftest.exe
 if errorlevel 1 exit /b 1
 cl /nologo /W4 /O2 /MT /EHsc /std:c++17 mode_selftest.cpp /link /OUT:native-mode-selftest.exe
+if errorlevel 1 exit /b 1
+cl /nologo /W4 /O2 /MT /EHsc /std:c++17 input_key_selftest.cpp /link /OUT:native-input-key-selftest.exe
 exit /b %errorlevel%

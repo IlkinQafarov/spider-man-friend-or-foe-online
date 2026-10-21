@@ -8,7 +8,7 @@ Two friends, two Windows game instances, and an independent English or Russian l
 
 ## What has been demonstrated
 
-Current **scenario 10 / wire protocol 3** passed a **3,600-tick** English/Russian gate with keyboard/controller fixtures, jitter, mock Steam relay and native pause/resume. All consecutive selected-state samples matched; combat checks observed movement, damage and hostile defeat. Games, launchers and relays exited 0 without timeout or forced cleanup; each relay sent and received 461,008 bytes with zero discarded bytes. This remains a bounded same-machine test.
+Current **scenario 11 / wire protocol 3** passed two English/Russian gates: **7,200 ticks with three fixture-driven area transitions**, and **3,600 ticks with native pause/resume**. Both used keyboard/controller fixtures, jitter and a mock Steam relay. All consecutive selected-state samples matched; games, launchers and relays exited 0 without timeout or forced cleanup. Each relay sent/received 921,808 bytes in the transition gate and 461,008 in the pause gate, with zero discarded bytes. These remain bounded same-machine tests.
 
 On **scenario version 5**, two separate English/Russian game processes completed a bounded **7,200-tick** automated gate with keyboard/controller input fixtures, injected timing jitter, a mock Steam relay and **three fixture-driven area swaps**. Selected state checks matched, all owned game/launcher/relay processes exited normally, and each relay sent and received 921,808 bytes with zero discarded bytes. This is historical evidence for that scenario, not a pass for the current source.
 
@@ -16,9 +16,9 @@ A separate **scenario-5** check reached **361 ticks** on the unlimited real-inpu
 
 Actual two-PC Steam delivery, ordinary campaign transitions and menus, save/resume, reconnect and complete world-state coverage remain unverified. A Steam lobby create/leave smoke check passed, but carried no game traffic. See the [evidence and limits](docs/STATUS.md) before interpreting any pass.
 
-Current source has broader area, progress and mode checks. Own-code mode/progress/profile fixtures pass. Recent failed gates, corrections and the scenario-10 pause result are recorded in [Status](docs/STATUS.md#current-source-and-recent-failures).
+Current source has broader area, progress and mode checks, bounded native keyboard-name lookup and canonical internal key names. Own-code key-name/mode/progress/profile fixtures pass. Recent failed gates, corrections and their limits are recorded in [Status](docs/STATUS.md#current-source-and-recent-failures).
 
-The next multi-area regression (**run 033**) failed on both clients during native startup, before gameplay. Startup reliability is an open blocker; the earlier scenario-10 pause gate remains a scoped pass. See [Status](docs/STATUS.md#current-source-and-recent-failures).
+Earlier **run 033** failed on both clients during native startup, before gameplay. The guarded scenario-11 runs passed; the original trigger remains unconfirmed. Current internal naming requires an already-loaded standard US keyboard layout, preserves native display labels and changes no Windows settings. Other layouts and physical input usability need further validation. See [Status](docs/STATUS.md#current-source-and-recent-failures).
 
 ## How far along?
 

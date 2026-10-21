@@ -30,7 +30,7 @@ python -I qa/run_pair.py --name mixed-001 --frames 7200 --seconds 300 --keyboard
 python -I qa/run_pair.py --name pause-001 --frames 3600 --seconds 300 --pause --keyboard-host --jitter --steam-mock
 ```
 
-The first command is a new test, not a current-source PASS claim. Historical 7,200-tick/three-area and 361-tick quiet lifecycle passes used scenario 5. Current scenario 10 / wire protocol 3 passed the second command's bounded 3,600-tick pause/keyboard/jitter/mock-relay case: selected state matched, games/launchers/relays exited 0, and each relay sent/received 461,008 bytes with zero discarded bytes. No current-version three-area pass is claimed.
+Scenario 11 / wire protocol 3 passed both bounded cases in runs 034/035: 7,200 ticks with three fixture-driven area changes, and 3,600 ticks with native pause/resume. Selected state matched, games/launchers/relays exited 0, and each relay sent/received 921,808 or 461,008 bytes respectively, with zero discarded bytes. A command for a new run still needs its own evidence. See [Status](../docs/STATUS.md) for retained failures and scope limits.
 
 `--frames` accepts 60..12000 (default 3600), `--seconds` accepts 60..300 (default 240), and `--area` defaults to `Tokyo/1_Level/1_Area`. Names are at most 64 ASCII letters/digits with single hyphens between groups. `--pause` requires more than 430 frames and excludes mutation/disconnect fixtures. Both peers must report native pause, frozen-world and resume assertions. Fixture-only assertions stop at tick 430; ordinary axis and continuous mode/world/progress checks stay enabled. Shorter cases are not exempted from missing combat or requested fixture observations.
 

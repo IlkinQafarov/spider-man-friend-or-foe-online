@@ -15,6 +15,7 @@
 #include "device_calls.inc"
 #include "progress_sample.hpp"
 #include "mode_sample.hpp"
+#include "input_key_names.hpp"
 
 // Own research code. Hooks the guarded executable only; this is not an OS sandbox.
 static wchar_t sandbox[32768], gameRoot[32768];
@@ -276,6 +277,79 @@ typedef void (__thiscall* FlowNativeFn)(void*,unsigned);
 static bool readMemory(const void* address,void* output,SIZE_T bytes){SIZE_T got=0;return ReadProcessMemory(GetCurrentProcess(),address,output,bytes,&got)&&got==bytes;}
 static DWORD readWord(ULONG_PTR address){DWORD word=0;readMemory((void*)address,&word,sizeof(word));return word;}
 static float readFloat(ULONG_PTR address){float value=0;readMemory((void*)address,&value,sizeof(value));return value;}
+static HKL inputActualLayout=0,inputCanonicalLayout=0;
+[[noreturn]] static void startupInputFailure(const char* reason){
+    networkFailed=true;log("NET FAIL input startup rejected reason=%s; no key substituted; owned game exits86",reason);
+    ExitProcess(86);
+}
+static HKL WINAPI canonicalKeyboardLayout(DWORD thread){
+    // Only52653C is patched. Its saved HKL is consumed by the initializer's
+    // MapVirtualKeyEx/ToUnicodeEx internal-name generation; native DirectInput
+    // display names at descriptor+54 are obtained independently and preserved.
+    inputActualLayout=GetKeyboardLayout(thread);
+    if(thread!=0)startupInputFailure("unexpected keyboard initializer thread argument");
+    HKL loaded[256]={};int count=GetKeyboardLayoutList(256,loaded);
+    if(count<=0||count>256)startupInputFailure("cannot enumerate already loaded keyboard layouts");
+    std::uint32_t handles[256]={};for(int i=0;i<count;i++)handles[i]=(std::uint32_t)(ULONG_PTR)loaded[i];
+    std::uint32_t selected=0;
+    if(!coop::SelectLoadedUSLayout(handles,(std::size_t)count,selected)){
+        log("INPUT KEY_LAYOUT actual=%p canonical=unavailable loaded_count=%d; no layout activated or installed",inputActualLayout,count);
+        startupInputFailure("standard US keyboard layout is not already loaded");
+    }
+    HKL canonical=(HKL)(ULONG_PTR)selected;
+    struct Translation{UINT scan;wchar_t expected;};
+    const Translation translations[]={{0x11,L'w'},{0x1e,L'a'},{0x1f,L's'},{0x20,L'd'},
+        {0x15,L'y'},{0x2c,L'z'},{2,L'1'},{0x0c,L'-'},{0x27,L';'},{0x28,L'\''},
+        {0x29,L'`'},{0x2b,L'\\'},{0x1a,L'['},{0x1b,L']'},{0x33,L','},{0x34,L'.'},{0x35,L'/'}};
+    const BYTE state[256]={};
+    for(const auto& test:translations){
+        UINT vk=MapVirtualKeyExW(test.scan,3,canonical);wchar_t output[4]={};
+        if(!vk||ToUnicodeEx(vk,test.scan,state,output,4,0,canonical)!=1||output[0]!=test.expected)
+            startupInputFailure("already loaded US handle failed canonical physical-key validation");
+    }
+    inputCanonicalLayout=canonical;
+    log("INPUT KEY_LAYOUT actual=%p canonical=%p validated_physical_keys=%u internal_names_only=1 display_names_native=1",inputActualLayout,canonical,(unsigned)(sizeof(translations)/sizeof(translations[0])));
+    return canonical;
+}
+static bool readNativeKeyName(DWORD address,coop::KeyName& out){
+    return coop::ReadNativeKeyName(address,[](std::uint32_t from,void* to,std::size_t bytes){
+        return readMemory((const void*)(ULONG_PTR)from,to,bytes);
+    },out);
+}
+static void formatKeyName(const coop::KeyName& name,char (&out)[1281]){
+    unsigned at=0;for(std::size_t i=0;i<name.length;i++)at+=(unsigned)sprintf(out+at,"%04x%s",(unsigned)name.text[i],i+1<name.length?"-":"");out[at]=0;
+}
+static DWORD __fastcall guardedKeyLookup(void* provider,void*,DWORD requested){
+    DWORD table=0,functions[6]={};
+    if(!provider||!readMemory(provider,&table,sizeof(table))||!table||
+       !readMemory((void*)(table+0x10),functions,sizeof(functions)))startupInputFailure("unreadable input provider vtable");
+    // Other providers retain their native ABI/semantics. The crash path is
+    // specifically the keyboard getter5262F0 and global descriptor table.
+    if(functions[1]!=0x5262f0)return ((DWORD(__thiscall*)(void*,DWORD))0x525c30)(provider,requested);
+    if(functions[0]!=0x5262e0||functions[5]!=0x526350)startupInputFailure("keyboard provider ABI guard");
+    DWORD count=0,descriptors=0;
+    if(!readMemory((void*)0x5955cc,&count,4)||!readMemory((void*)0x5955c8,&descriptors,4)||!descriptors)
+        startupInputFailure("unreadable keyboard descriptor table");
+    coop::KeyName target;
+    if(!readNativeKeyName(requested,target)){
+        log("INPUT KEY_LOOKUP count=%lu request_utf16=malformed actual_layout=%p canonical_layout=%p",count,GetKeyboardLayout(0),inputCanonicalLayout);
+        startupInputFailure("malformed keyboard binding name");
+    }
+    char encoded[1281]={};formatKeyName(target,encoded);
+    log("INPUT KEY_LOOKUP count=%lu request_utf16=%s actual_layout=%p canonical_layout=%p",count,encoded,GetKeyboardLayout(0),inputCanonicalLayout);
+    if(!inputCanonicalLayout)startupInputFailure("canonical keyboard initializer was not observed");
+    std::uint32_t found=0xffffffffu,last=0xffffffffu;
+    auto result=coop::FindKeyName(count,target,[&](std::uint32_t index,coop::KeyName& name){
+        last=index;std::uint64_t address=std::uint64_t(descriptors)+std::uint64_t(index)*0xa4+4;
+        return address<=0xfffffff0ull&&readNativeKeyName((DWORD)address,name);
+    },found);
+    if(result!=coop::KeyLookup::Found){
+        log("INPUT KEY_LOOKUP_REJECT count=%lu last_index=%lu request_utf16=%s status=%s",count,(DWORD)last,encoded,result==coop::KeyLookup::Missing?"missing":"malformed");
+        startupInputFailure("keyboard binding cannot be resolved within the descriptor count");
+    }
+    log("INPUT KEY_LOOKUP_FOUND index=%lu count=%lu",(DWORD)found,count);
+    return found;
+}
 static void selectVirtualPad(){
     if(virtualPadSelected||!originalCaps)return;virtualPadSelected=true;virtualPadIndex=~0u;
     for(int index=3;index>=0;index--){if(humanInputFixture&&index==0)continue;XINPUT_CAPABILITIES capabilities={};if(originalCaps((DWORD)index,0,&capabilities)==ERROR_DEVICE_NOT_CONNECTED){virtualPadIndex=(DWORD)index;break;}}
@@ -444,7 +518,7 @@ static void networkInput(){
         for(unsigned i=0;i<32;i++){unsigned byte=0;sscanf(digest+i*2,"%2x",&byte);build[i]=(BYTE)byte;}
         if(networkContentVerified)build=networkContent;
         // Private scenario tag: Tokyo1/1, seed8466,60Hz,delay3,combat bot2.
-        scenario[0]=10;scenario[1]=0x21;scenario[2]=0x12;scenario[3]=60;scenario[4]=3;scenario[5]=networkPathSync?1:0;scenario[6]=networkAmbientSplit?1:0;scenario[7]=humanInputMode?1:0;scenario[8]=humanInputFixture?1:0;
+        scenario[0]=11;scenario[1]=0x21;scenario[2]=0x12;scenario[3]=60;scenario[4]=3;scenario[5]=networkPathSync?1:0;scenario[6]=networkAmbientSplit?1:0;scenario[7]=humanInputMode?1:0;scenario[8]=humanInputFixture?1:0;
         memcpy(scenario.data()+12,&networkFrameLimit,sizeof(networkFrameLimit));
         unsigned areaHash=2166136261u;for(const char* c=networkArea;*c;c++)areaHash=(areaHash^(BYTE)*c)*16777619u;memcpy(scenario.data()+16,&areaHash,sizeof(areaHash));
         scenario[9]=networkTransitionFixture?1:0;
@@ -760,6 +834,22 @@ static bool patchVerifiedCall(DWORD address,DWORD expected,void* replacement){
     BYTE* at=(BYTE*)address;if(at[0]!=0xe8||(DWORD)(address+5+*(LONG*)(at+1))!=expected){log("FAIL AUTOTEST call signature address=%08lx",address);return false;}
     DWORD old=0;if(!VirtualProtect(at,5,PAGE_EXECUTE_READWRITE,&old))return false;*(DWORD*)(at+1)=(DWORD)(ULONG_PTR)replacement-(address+5);FlushInstructionCache(GetCurrentProcess(),at,5);DWORD ignored=0;bool ok=VirtualProtect(at,5,old,&ignored)!=0;log("AUTOTEST verified call patched address=%08lx original=%08lx",address,expected);return ok;
 }
+static bool patchKeyboardLayoutCall(){
+    // Exact-build FF15 [GetKeyboardLayout IAT] at52653C; E8+nop keeps all6
+    // bytes and its stdcall argument/return contract. No process-wide IAT edit.
+    const DWORD address=0x52653c,iat=0x5562a8;BYTE prior[6]={};DWORD import=0;
+    FARPROC expected=GetProcAddress(GetModuleHandleW(L"user32.dll"),"GetKeyboardLayout");
+    if(!expected||!readMemory((void*)address,prior,6)||prior[0]!=0xff||prior[1]!=0x15||
+       memcmp(prior+2,&iat,4)||!readMemory((void*)iat,&import,4)||import!=(DWORD)(ULONG_PTR)expected){
+        log("FAIL canonical keyboard layout call/IAT signature");return false;
+    }
+    BYTE patch[6]={0xe8,0,0,0,0,0x90};DWORD delta=(DWORD)(ULONG_PTR)canonicalKeyboardLayout-(address+5);
+    memcpy(patch+1,&delta,4);DWORD old=0;if(!VirtualProtect((void*)address,6,PAGE_EXECUTE_READWRITE,&old))return false;
+    memcpy((void*)address,patch,6);bool flushed=FlushInstructionCache(GetCurrentProcess(),(void*)address,6)!=0;
+    DWORD ignored=0;bool restored=VirtualProtect((void*)address,6,old,&ignored)!=0;
+    log("INPUT verified initializer layout call patched address=%08lx original_iat=%08lx protection_restored=%u",address,iat,restored);
+    return flushed&&restored;
+}
 static bool install() {
     BYTE* base=(BYTE*)GetModuleHandleW(0);auto dos=(IMAGE_DOS_HEADER*)base;auto nt=(IMAGE_NT_HEADERS*)(base+dos->e_lfanew);
     if(!selfTest){const BYTE expected[]={0xe8,3,4,0,0,0xe9,0x35,0xfd,0xff,0xff};if((ULONG_PTR)base!=0x400000||nt->FileHeader.Machine!=IMAGE_FILE_MACHINE_I386||nt->OptionalHeader.AddressOfEntryPoint!=0x12fd2c){log("FAIL game PE guard");return false;}
@@ -783,6 +873,7 @@ static bool install() {
     if(!selfTest&&networkRole)for(DWORD address:rngCallSites)if(!patchVerifiedCall(address,0x4318f5,(void*)randomEntry))return false;
     if(!selfTest&&humanKeyboardFixture&&!patchVerifiedCall(0x525c00,0x526240,(void*)keyboardPollFixture))return false;
     if(!selfTest&&humanInputMode)for(DWORD address:deviceCallSites)if(!patchVerifiedCall(address,0x40182d,(void*)reassignLocalDevice))return false;
+    if(!selfTest&&humanInputMode&&(!patchKeyboardLayoutCall()||!patchVerifiedCall(0x52a770,0x525c30,(void*)guardedKeyLookup)))return false;
     return true;
 }
 static LONG CALLBACK exception(EXCEPTION_POINTERS* p){

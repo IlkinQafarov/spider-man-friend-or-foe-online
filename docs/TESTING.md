@@ -84,6 +84,10 @@ Use the runner's documented disconnect and deliberate-mutation cases separately.
 
 For an ordinary user stop, require the separate ordered-stop lifecycle evidence; do not mislabel cancellation as finite scenario completion. The historical scenario-5 quiet real-input-path check reached 361 ticks without input fixtures, then stopped normally. It did not test a person using actual keyboard/controller hardware.
 
+Current scenario-11 gates are recorded in [Status](STATUS.md): runs 034/035 cover three fixture-driven area transitions and native pause/resume. Run 036 repeats the quiet fixture-disabled gameplay lifecycle with normal ordered stop; its controlled pre-game route took about 212 seconds to become ready. These checks do not establish physical input usability or ordinary campaign flow.
+
+After building, `probe/native-input-key-selftest.exe` exercises bounded key lookup, guarded native-string parsing and selection of an already-loaded exact US layout, including two mutation twins. It uses synthetic memory/layout lists, not game data or OS layout changes. The runtime additionally validates 17 physical translations and checks each actual requested keyboard binding; it does not install or activate layouts.
+
 ## Preparing source for review
 
 ```powershell

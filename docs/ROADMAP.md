@@ -9,7 +9,7 @@ Development is continuing. The current [40/100 estimate](STATUS.md#progress-esti
 * Keep normal stop, malformed protocol, content mismatch, timeout and deliberate-divergence tests strict.
 * Expand sampled state coverage and preserve a small, reproducible case for each desync.
 
-Current scenario-10 source adds canonical mode and broader area/progress checks. Its bounded 3,600-tick pause/combat gate passed. The previous 7,200-tick/three-area scenario-5 gate remains historical; wider gameplay and transition coverage still require fresh evidence.
+Current scenario-11 source includes bounded keyboard-name lookup and canonical internal names as well as broader mode/area/progress checks. Fresh 7,200-tick/three-area and 3,600-tick pause/combat gates passed. Their same-machine fixture scope does not establish ordinary campaign travel, hardware compatibility or remote delivery. The earlier startup failure remains recorded; its exact trigger is unconfirmed.
 
 Exit evidence: another developer can reproduce the bounded result using their own supported game copy, without exposing private game data or touching original saves.
 

@@ -53,3 +53,5 @@ python -I launcher/build_package.py --selftest
 The builder has an explicit `--build <new-package-name>` mode. It copies only allowlisted own runtime outputs, the content manifest and instructions; existing output names are refused. Do not turn a successful package build into a playable-release claim. No release binaries are published with this research preview.
 
 Continue with [Testing](TESTING.md) before attempting a game run.
+
+The current native input guard requires an already-loaded standard US keyboard layout for canonical internal binding names. It does not install or activate layouts or change Windows settings. Native display labels remain localized. A missing supported layout or unresolved binding rejects startup with code 86; broader layout and hardware compatibility remains unverified.
