@@ -1,0 +1,4 @@
+# Keep the pinned manifest bytes identical on every checkout.
+* text=auto
+compatibility/baseline.json -text
+steam/native/steam_appid.txt -text
