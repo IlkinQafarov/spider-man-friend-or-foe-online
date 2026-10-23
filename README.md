@@ -4,7 +4,7 @@
 
 Two friends, two Windows game instances, and an independent English or Russian language choice on each PC. This project connects the game's native two-player controls through a synchronized input stream.
 
-**Research preview · active development · source only.** This is not a playable public release. No release binaries, game files or Steam libraries are distributed here. The launcher's play mode uses the native campaign route; the bounded Tokyo scenario remains for automated connection checks.
+**Alpha · active development.** Test builds are on the [Releases](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases) page (marked alpha; expect bugs). No game files or Steam libraries are distributed here: you need your own copy of the game. The launcher's play mode uses the native campaign route; the bounded Tokyo scenario remains for automated connection checks.
 
 ## Current state (2026-10-23)
 
