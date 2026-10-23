@@ -207,7 +207,7 @@ def main():
     parser.add_argument('--smoke', action='store_true', help='Create and leave one lobby; no game or invites')
     args = parser.parse_args()
     if args.ready_file: args.ready_file = args.ready_file.absolute()
-    if not 1024 <= args.local_port <= 65535 or not 0 <= args.seconds <= 600:
+    if not 1024 <= args.local_port <= 65535 or not 0 <= args.seconds <= 1200:
         parser.error('Invalid local port or duration')
     if args.role == 'join' and not args.lobby: parser.error('Join requires a lobby id')
     if not 0 <= args.lobby < 2**64: parser.error('Lobby id must be an unsigned 64-bit number')

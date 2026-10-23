@@ -14,7 +14,7 @@ HP = re.compile(r'NET actor tick=(\d+) serial=(\d+).*? hp=([-\d.e+]+)/([-\d.e+]+
 def xyz(text):
     return tuple(struct.unpack('<f', bytes.fromhex(word)[::-1])[0] for word in text.split(','))
 
-def assess(logs, frames, exits, native_axes=False, disconnected=False, transition=False, transition_count=1, progress=False):
+def assess(logs, frames, exits, native_axes=False, disconnected=False, transition=False, transition_count=1, progress=False, combat=True):
     errors = []
     parsed = []
     for seat, text in enumerate(logs):
@@ -37,8 +37,8 @@ def assess(logs, frames, exits, native_axes=False, disconnected=False, transitio
             errors.append(f'{name}: two expected logical slots not retained')
         if progress and (not rows or any(not row[8] or not row[9] for row in rows)):
             errors.append(f'{name}: serialized progress/current-area sample absent')
-        if not rows or max(int(row[6]) for row in rows) < (2 if transition else 3):
-            errors.append(f'{name}: no nonparty character observed')
+        if not rows or max(int(row[6]) for row in rows) < (3 if combat and not transition else 2):
+            errors.append(f'{name}: insufficient sampled characters for this gate')
         for player, column in ((0, 2), (1, 3)):
             try:
                 positions = [xyz(row[column]) for row in rows]
@@ -49,9 +49,9 @@ def assess(logs, frames, exits, native_axes=False, disconnected=False, transitio
             except (ValueError, struct.error):
                 errors.append(f'{name}: invalid player {player} pose')
         health = [(int(m[2]), float(m[3]), float(m[4]), int(m[5])) for m in HP.finditer(text)]
-        if not transition and not any(serial < 2 and hp < maximum and maximum > 0 for serial, hp, maximum, _ in health):
+        if combat and not transition and not any(serial < 2 and hp < maximum and maximum > 0 for serial, hp, maximum, _ in health):
             errors.append(f'{name}: no party damage observed')
-        if not transition and not any(serial >= 2 and team == 0 and hp <= 0 and maximum > 0 for serial, hp, maximum, team in health):
+        if combat and not transition and not any(serial >= 2 and team == 0 and hp <= 0 and maximum > 0 for serial, hp, maximum, team in health):
             errors.append(f'{name}: no hostile defeat observed')
         if native_axes and ('HUMAN AXIS_ORACLE' not in text or 'HUMAN reserved remote XInput' not in text):
             errors.append(f'{name}: native input oracle absent')
@@ -73,7 +73,7 @@ def assess(logs, frames, exits, native_axes=False, disconnected=False, transitio
         actual = {int(t) for t in re.findall(r'HUMAN DISCONNECT_NEUTRAL tick=(\d+)', logs[0])}
         if not set(range(901, 932)).issubset(actual):
             errors.append('host: all controller-disconnect neutral samples were not observed')
-    return {'gate': 'bounded-native-area-transition' if transition else 'bounded-native-input-combat', 'result': 'FAIL' if errors else 'PASS',
+    return {'gate': 'bounded-native-area-transition' if transition else ('bounded-native-input-combat' if combat else 'bounded-native-input'), 'result': 'FAIL' if errors else 'PASS',
             'expected_frames': frames, 'sample_counts': [len(rows) for rows in parsed], 'errors': errors,
             'scope': 'Same-machine paired processes; sampled character/health/RNG/input parity and normal exit. Campaign, full-world state, actual remote PCs and WAN remain unverified.'}
 
@@ -84,6 +84,11 @@ def selftest():
     shared = '\n'.join(rows) + '\nNET SCRIPT_COMPLETE frames=4; peer completion confirmed; no co-op QA awarded\nNET clean WM_CLOSE posted to owned game window\nNET actor tick=2 serial=0 kind=0 hp=199/200 slot=0 team_flag=1\nNET actor tick=3 serial=2 kind=0 hp=-1/45 slot=-1 team_flag=0\n'
     good = [shared + f'NET READY role={i+1}\n' for i in range(2)]
     assert assess(good, 4, [0, 0])['result'] == 'PASS'
+    movement_only = [text[:text.index('NET actor')] + f'NET READY role={i+1}\n'
+                     for i, text in enumerate(good)]
+    movement_only = [text.replace('world=3,', 'world=2,') for text in movement_only]
+    assert assess(movement_only, 4, [0, 0], combat=False)['result'] == 'PASS'
+    assert assess(movement_only, 4, [0, 0])['result'] == 'FAIL'
     cases = []
     bad = copy.copy(good); bad[0] = bad[0].replace(rows[1], ''); cases.append((bad, [0, 0]))
     bad = copy.copy(good); bad[0] += rows[0] + '\n'; cases.append((bad, [0, 0]))
@@ -108,7 +113,7 @@ def selftest():
     assert assess(progress_good, 4, [0, 0], progress=True)['result'] == 'PASS'
     bad = progress_good.copy(); bad[1] = bad[1].replace('progress=11112222', 'progress=55556666', 1)
     assert assess(bad, 4, [0, 0], progress=True)['result'] == 'FAIL'
-    print(f'SCORER_SELFTEST_PASS positive=3 rejected={len(cases)+8}')
+    print(f'SCORER_SELFTEST_PASS positive=4 rejected={len(cases)+9}')
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

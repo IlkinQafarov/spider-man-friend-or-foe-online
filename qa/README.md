@@ -15,6 +15,8 @@ python -I qa/prepare_publication.py --selftest
 
 These modes use synthetic state; they do not start games, load Steam or touch a real QA slot. `game_lane.py` tests cover retained process identity, exclusive lease behavior and caught mutation twins. Runner fixtures keep timeout, forced completion, malformed evidence and deliberate divergence distinct from successful gameplay completion.
 
+When a live observation has identified a blocker, create a regular `stop.request` file inside that run's unique `qa/result-<name>/` directory. The runner records cancellation as **FAIL** and cleans up its own retained launcher handles and jobs. This avoids waiting for the deadline; it never turns a partial observation into a successful gate.
+
 ## Exclusive game lane
 
 Set `COOP_ANYTHING_ROOT` to a checkout of the [coop-anything hub](https://github.com/cranebeaker/coop-anything) containing `tools/gameslot/gameslot.py`, unless an ancestor checkout can be discovered. The backend is reused from that checkout, not vendored. An inherited `GAMESLOT_DIR` must remain inside the selected hub's private `local/` directory.

@@ -68,6 +68,23 @@ def environment(source, args, seat, digest):
         options["TRANSITION_COUNT"] = str(args.transition_count)
     if args.pause:
         options["PAUSE_FIXTURE"] = "1"
+    if getattr(args, "campaign", False):
+        options.pop("AUTOTEST")
+        options.pop("AREA")
+        options.update(CAMPAIGN="1", CAMPAIGN_FIXTURE="1")
+        if seat == "peer" and args.campaign_delay_ms:
+            options["CAMPAIGN_DELAY_MS"] = str(args.campaign_delay_ms)
+    if getattr(args, "skip_cutscenes", False) and getattr(args, "campaign", False):
+        options["SKIP_NIS"] = "1"
+    if getattr(args, "mission_end", False):
+        options["MISSION_END_FIXTURE"] = "1"
+        options["MISSION_CYCLES"] = str(getattr(args, "mission_cycles", 1))
+    display = getattr(args, "display_" + seat, None)
+    if display:
+        mode, _, resolution = display.partition(":")
+        options["DISPLAY_MODE"] = mode
+        if resolution:
+            options["RESOLUTION"] = resolution
     if args.keyboard_host and seat == "host":
         options["KEYBOARD_FIXTURE"] = "1"
     if args.steam_mock and seat == "peer":
@@ -130,8 +147,24 @@ def assess_pair(logs, launcher_logs, exits, launcher_codes, args, assessor):
     if args.mutate_host:
         gate = mutation_gate(logs, exits)
     else:
-        gate = assessor(logs, args.frames, exits, native_axes=True, disconnected=args.disconnect_host, transition=args.transition, transition_count=args.transition_count, progress=True)
+        extra = {"combat": False} if getattr(args, "campaign", False) else {}
+        frames = args.frames
+        if getattr(args, "mission_end", False):
+            # The finite exchange ends at the mutual hub return, not at a fixed tick.
+            ends = [re.findall(r"^NET SCRIPT_COMPLETE frames=([0-9]+);", text, re.M) for text in logs]
+            if len(ends) == 2 and all(len(end) == 1 for end in ends) and ends[0] == ends[1] and 0 < int(ends[0][0]) < args.frames:
+                frames = int(ends[0][0])
+        gate = assessor(logs, frames, exits, native_axes=True, disconnected=args.disconnect_host, transition=args.transition, transition_count=args.transition_count, progress=True, **extra)
     errors = list(gate.get("errors", []))
+    if getattr(args, "campaign", False):
+        errors.extend(campaign_evidence(logs, args.campaign_delay_ms, getattr(args, "mission_end", False), getattr(args, "mission_cycles", 1)))
+        gate["gate"] = "retail-campaign-bootstrap"
+        gate["scope"] = "Native New Game, hub and first-mission bootstrap plus bounded sampled-state/movement parity on one PC. Full campaign, persistence, hardware and WAN remain unverified."
+        if getattr(args, "mission_end", False):
+            gate["gate"] = "retail-campaign-mission-end-return"
+            gate["sampled_frames"] = frames
+            gate["scope"] = ("Native New Game, hub, first-mission start, fixture-invoked retail mission-end routine, results screen, "
+                             "synchronized hub reload and equal progress on one PC. Mission content, later missions, saves, hardware and WAN remain unverified.")
     if args.pause:
         for seat, text in zip(SEATS, logs):
             for assertion in ("ENTERED", "WORLD_FROZEN", "RESUMED", "COMPLETE"):
@@ -148,6 +181,70 @@ def assess_pair(logs, launcher_logs, exits, launcher_codes, args, assessor):
     gate["errors"] = errors
     gate["result"] = "FAIL" if errors or gate.get("result") != "PASS" else "PASS"
     return gate
+
+
+def campaign_evidence(logs, delay_ms=0, mission_end=False, cycles=1):
+    errors = []
+    if len(logs) != 2:
+        errors.append("native campaign evidence requires exactly two seats")
+    required = ("NEW_GAME", "PROFILE", "HUB", "MISSION_COMMIT", "GAMEPLAY") + (("RETURN_HUB", "RETURN_HUB_SYNC") if mission_end else ())
+    if mission_end and cycles == 2:
+        required += ("MISSION_COMMIT", "GAMEPLAY")
+    bodies = {
+        "NEW_GAME": r"operation=0 selection=0",
+        "PROFILE": r"slot=[0-2] native_init=1 operation=0",
+        "HUB": r"path=FrontEndHub/FrontEnd/FrontEndHub area=97 flow=16",
+        "MISSION_COMMIT": r"path=Tokyo/1_Level/1_Area area=0 pending=32",
+        "GAMEPLAY": r"path=Tokyo/1_Level/1_Area area=0 flow=128 sidekick=(?:0|[1-9][0-9]*) prepared=1",
+        "RETURN_HUB": r"path=FrontEndHub/FrontEnd/FrontEndHub area=97 flow=16 tick=[0-9]+ mission_end=1",
+        "RETURN_HUB_SYNC": r"progress=[0-9a-f]{8} tick=[0-9]+",
+    }
+    observations = []
+    for seat, text in zip(SEATS, logs):
+        loads = re.findall(r"^CAMPAIGN PRELOAD_(WAIT|FORWARD) sequence=([0-9]+) path=([^ ]+) area=([0-9]+) (.+)$", text, re.M)
+        expected_loads = [(event, str(sequence), path, str(area), suffix)
+                          for sequence, path, area in ((1, "FrontEndHub/FrontEnd/FrontEndHub", 97),
+                                                       (2, "Tokyo/1_Level/1_Area", 0))
+                                                      + (((3, "FrontEndHub/FrontEnd/FrontEndHub", 97),) if mission_end else ())
+                                                      + (((4, "Tokyo/1_Level/1_Area", 0),) if mission_end and cycles == 2 else ())
+                          for event, suffix in (("WAIT", "original_calls=0"),
+                                                ("FORWARD", "peer_ready=1 original_calls=1"))]
+        if loads != expected_loads:
+            errors.append(seat + ": missing, duplicate, reordered or incorrect native preload readiness/forward evidence")
+        hub_forward = text.find("CAMPAIGN PRELOAD_FORWARD sequence=1 ")
+        mission_wait = text.find("CAMPAIGN PRELOAD_WAIT sequence=2 ")
+        mission_forward = text.find("CAMPAIGN PRELOAD_FORWARD sequence=2 ")
+        if not (0 <= hub_forward < text.find("CAMPAIGN ASSERT HUB ") and
+                0 <= text.find("CAMPAIGN ASSERT MISSION_COMMIT ") < mission_wait < mission_forward < text.find("CAMPAIGN ASSERT GAMEPLAY ")):
+            errors.append(seat + ": native load forwarding is not ordered before the corresponding ready assertions")
+        first_tick = re.search(r"^NET state tick=0 ", text, re.M)
+        if first_tick and first_tick.start() < text.find("CAMPAIGN ASSERT GAMEPLAY "):
+            errors.append(seat + ": gameplay sampling began before native campaign readiness")
+        delays = re.findall(r"^CAMPAIGN PRELOAD_DELAY delay_ms=([0-9]+)$", text, re.M)
+        if delays != ([str(delay_ms)] if seat == "peer" and delay_ms else []):
+            errors.append(seat + ": configured peer preload delay was not observed exactly once")
+        if delays and text.find("CAMPAIGN PRELOAD_DELAY") > text.find("CAMPAIGN PRELOAD_WAIT"):
+            errors.append(seat + ": preload delay occurred after the first load wait")
+        markers = re.findall(r"^CAMPAIGN ASSERT ([A-Z_]+)(?: ([^\r\n]*))?$", text, re.M)
+        selected = [(kind, data) for kind, data in markers if kind in required]
+        if tuple(kind for kind, _ in selected) != required:
+            errors.append(seat + ": need exactly one ordered native campaign assertion for each required phase")
+        for kind, data in selected:
+            if re.fullmatch(bodies[kind], data) is None:
+                errors.append(seat + ": invalid native campaign assertion body for " + kind)
+        if len(re.findall(r"^CAMPAIGN CONFIG enabled=1 fixture=1 research_autotest=0$", text, re.M)) != 1:
+            errors.append(seat + ": explicit retail campaign configuration absent")
+        if re.search(r"AUTOTEST selected|TRANSITION PARTY_INSIDE_REAL_EXIT|TRANSITION AREA_CHANGED", text):
+            errors.append(seat + ": research bootstrap/travel fixture contaminated the campaign gate")
+        if mission_end:
+            invoked = re.findall(r"^MISSION_END INVOKED (tick=[0-9]+ scene=8 flow=128)$", text, re.M)
+            if len(invoked) != 1:
+                errors.append(seat + ": mission-end routine must open results scene 8 exactly once during gameplay")
+            selected = selected + [("MISSION_END", invoked[0] if invoked else "")]
+        observations.append(selected)
+    if len(observations) != 2 or observations[0] != observations[1]:
+        errors.append("native campaign choices/readiness differ between peers")
+    return errors
 
 
 def cleanup_owned(processes, deadline):
@@ -173,6 +270,15 @@ def cleanup_owned(processes, deadline):
             pass
 
 
+def check_stop_request(result_dir):
+    request = result_dir / "stop.request"
+    if request.exists() or request.is_symlink():
+        no_reparse(request)
+        if not request.is_file():
+            raise Failed("Invalid local QA stop request")
+        raise Failed("CANCELLED: local QA observation stopped before scenario completion")
+
+
 def run_suite(args, result_dir):
     launcher = ROOT / "probe" / "native-launcher.exe"
     preflight = ROOT / "compatibility" / "preflight.py"
@@ -182,7 +288,7 @@ def run_suite(args, result_dir):
     summary = {
         "schema": "coop-fof-pair-run-v1", "name": args.name, "result": "FAIL", "errors": [],
         "options": {key: getattr(args, key) for key in (
-            "frames", "seconds", "area", "disconnect_host", "jitter", "mutate_host", "transition", "transition_count", "keyboard_host", "steam_mock", "pause")},
+            "frames", "seconds", "area", "disconnect_host", "jitter", "mutate_host", "transition", "transition_count", "keyboard_host", "steam_mock", "pause", "campaign", "campaign_delay_ms", "mission_end", "mission_cycles", "display_host", "display_peer")},
         "runs": [path.name for path in sandboxes], "preflight": [],
         "launcher_returncodes": [None, None], "game_exitcodes": [None, None],
     }
@@ -275,6 +381,7 @@ def run_suite(args, result_dir):
             processes.append(process)
             lane.register_launcher(process)
         while any(process.poll() is None for process in processes):
+            check_stop_request(result_dir)
             if helpers and any(process.poll() not in (None, 0) for process in helpers):
                 raise Failed('A mock Steam helper failed; stopping only owned processes')
             if any(process.poll() not in (None, 0) for process in processes):
@@ -350,16 +457,34 @@ def arguments(argv=None):
     parser.add_argument("--keyboard-host", action="store_true")
     parser.add_argument("--steam-mock", action="store_true")
     parser.add_argument("--pause", action="store_true", help="Require native pause/frozen-world/resume assertions on both seats")
+    parser.add_argument("--campaign", action="store_true", help="Require native retail New Game/hub/mission bootstrap; excludes the research route")
+    parser.add_argument("--campaign-delay-ms", type=int, default=0, help="Delay peer's first campaign preload readiness by 0..2000ms")
+    parser.add_argument("--mission-end", action="store_true", help="Campaign only: invoke the retail mission-end routine on both seats at tick1500 (fixture)")
+    parser.add_argument("--mission-cycles", type=int, default=1, help="With --mission-end: 2 = mission end, back to the hub, then a second mission until --frames")
+    parser.add_argument("--display-host", help="borderless[:WIDTHxHEIGHT] or window:WIDTHxHEIGHT for the host seat")
+    parser.add_argument("--display-peer", help="borderless[:WIDTHxHEIGHT] or window:WIDTHxHEIGHT for the peer seat")
+    parser.add_argument("--skip-cutscenes", action="store_true", help="Campaign bots skip movies the game lets players skip (faster runs)")
     parser.add_argument("--selftest", action="store_true", help="Own-code fixtures only; no preflights or launches")
     args = parser.parse_args(argv)
     if args.selftest:
         return args
     if not args.name or len(args.name) > 64 or not re.fullmatch(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*", args.name):
         parser.error("--name must contain 1..64 letters/digits with single hyphens between groups")
-    if not 60 <= args.frames <= 12000 or not 60 <= args.seconds <= 300:
-        parser.error("--frames must be 60..12000 and --seconds must be 60..300")
+    # Retail campaign bootstrap includes the 118 s intro movie and a long first-level load.
+    max_seconds = 1190 if args.campaign else 300  # mock broker/relay get seconds+10, capped at 1200
+    if not 60 <= args.frames <= 12000 or not 60 <= args.seconds <= max_seconds:
+        parser.error("--frames must be 60..12000 and --seconds must be 60..300 (60..1190 with --campaign)")
     if args.pause and (args.frames <= 430 or args.mutate_host or args.disconnect_host):
         parser.error("--pause requires --frames greater than430 and excludes mutation/disconnect fixtures")
+    if args.mission_cycles not in (1, 2) or (args.mission_cycles != 1 and not args.mission_end) or (args.mission_end and not args.campaign):
+        parser.error("--mission-cycles must be 1 or 2 and requires --mission-end, which requires --campaign")
+    for value in (args.display_host, args.display_peer):
+        if value is not None and not re.fullmatch(r"borderless(?::[0-9]{3,4}x[0-9]{3,4})?|window:[0-9]{3,4}x[0-9]{3,4}", value):
+            parser.error("--display-host/--display-peer must be borderless[:WxH] or window:WxH")
+    if not 0 <= args.campaign_delay_ms <= 2000 or (args.campaign_delay_ms and not args.campaign):
+        parser.error("--campaign-delay-ms must be 0..2000 and requires --campaign")
+    if args.campaign and (args.frames < 600 or args.pause or args.disconnect_host or args.mutate_host or args.area != "Tokyo/1_Level/1_Area"):
+        parser.error("--campaign requires at least600 ticks and excludes research area/pause/mutation/disconnect options")
     if not 1 <= args.transition_count <= 4 or (args.transition_count != 1 and not args.transition):
         parser.error("--transition-count must be1..4 and requires --transition when greater than1")
     if len(args.area) > 127 or not re.fullmatch(r"[A-Za-z0-9_]+(?:/[A-Za-z0-9_]+)*", args.area):
@@ -369,7 +494,7 @@ def arguments(argv=None):
 
 def selftest():
     from types import SimpleNamespace
-    from unittest.mock import Mock
+    from unittest.mock import Mock, patch
     complete = {'event': 'STREAM_COMPLETE', 'sent': 128, 'received': 256, 'discarded_after_game_reset': 0}
     assert stream_result(json.dumps(complete), 0)['sent'] == 128
     for text, code in (('', 0), (json.dumps(complete), 1),
@@ -430,6 +555,48 @@ def selftest():
         assert assess_pair([assertions, damaged], ["", ""], [0, 0], [0, 0], args, fake_assess)["result"] == "FAIL"
     assert arguments(["--name", "fixture", "--frames", "900", "--pause"]).pause
     args.pause = False
+    campaign_args = arguments(["--name", "campaign-fixture", "--frames", "600", "--seconds", "300",
+                               "--campaign", "--campaign-delay-ms", "500"])
+    host, peer = [environment({**inherited, "COOP_PROBE_AUTOTEST": "ExecutionPath",
+                              "COOP_PROBE_CAMPAIGN_DELAY_MS": "2000"}, campaign_args, seat, "a" * 64)
+                  for seat in SEATS]
+    assert all("COOP_PROBE_AUTOTEST" not in env and "COOP_PROBE_AREA" not in env for env in (host, peer))
+    assert all(env["COOP_PROBE_CAMPAIGN"] == env["COOP_PROBE_CAMPAIGN_FIXTURE"] == "1" for env in (host, peer))
+    assert "COOP_PROBE_CAMPAIGN_DELAY_MS" not in host and peer["COOP_PROBE_CAMPAIGN_DELAY_MS"] == "500"
+    phases = ["NEW_GAME operation=0 selection=0", "PROFILE slot=0 native_init=1 operation=0",
+              "HUB path=FrontEndHub/FrontEnd/FrontEndHub area=97 flow=16",
+              "MISSION_COMMIT path=Tokyo/1_Level/1_Area area=0 pending=32",
+              "GAMEPLAY path=Tokyo/1_Level/1_Area area=0 flow=128 sidekick=1 prepared=1"]
+    def load_pair(sequence, path, area):
+        return "\n".join(f"CAMPAIGN PRELOAD_{event} sequence={sequence} path={path} area={area} {suffix}"
+                          for event, suffix in (("WAIT", "original_calls=0"), ("FORWARD", "peer_ready=1 original_calls=1"))) + "\n"
+    campaign = "CAMPAIGN CONFIG enabled=1 fixture=1 research_autotest=0\n" + load_pair(1, "FrontEndHub/FrontEnd/FrontEndHub", 97)
+    campaign += "\n".join("CAMPAIGN ASSERT " + phase for phase in phases[:-1]) + "\n"
+    campaign += load_pair(2, "Tokyo/1_Level/1_Area", 0) + "CAMPAIGN ASSERT " + phases[-1] + "\n"
+    assert not campaign_evidence([campaign, campaign])
+    for damaged in (campaign.replace("native_init=1", "native_init=0"),
+                    campaign.replace("slot=0", "slot=3"), campaign.replace("flow=16", "flow=128"),
+                    campaign.replace("sidekick=1", "sidekick=01"),
+                    campaign.replace("fixture=1", "fixture=0"),
+                    campaign.replace("original_calls=0", "original_calls=1"),
+                    campaign.replace("peer_ready=1", "peer_ready=0"),
+                    campaign.replace("sequence=2", "sequence=3"),
+                    campaign.replace("MISSION_COMMIT", "UNKNOWN"),
+                    campaign + "CAMPAIGN ASSERT " + phases[0] + "\n",
+                    campaign + "AUTOTEST selected ExecutionPath\n",
+                    campaign.replace("CAMPAIGN ASSERT " + phases[0], "CAMPAIGN ASSERT " + phases[1], 1)):
+        assert campaign_evidence([damaged, damaged])
+    assert campaign_evidence([campaign, campaign.replace("sidekick=1", "sidekick=2")])
+    assert campaign_evidence([campaign, campaign.replace("PROFILE slot=0", "PROFILE slot=1")])
+    assert not campaign_evidence([campaign.replace("PROFILE slot=0", "PROFILE slot=2")] * 2)
+    assert campaign_evidence([campaign, campaign, campaign])
+    calls.clear()
+    delayed_campaign = campaign.replace("CAMPAIGN PRELOAD_WAIT sequence=1", "CAMPAIGN PRELOAD_DELAY delay_ms=500\nCAMPAIGN PRELOAD_WAIT sequence=1")
+    assert not campaign_evidence([campaign, delayed_campaign], 500)
+    assert campaign_evidence([campaign, delayed_campaign], 600)
+    assert campaign_evidence([campaign, campaign], 500)
+    assert assess_pair([campaign, delayed_campaign], ["", ""], [0, 0], [0, 0], campaign_args, fake_assess)["result"] == "PASS"
+    assert calls[0]["combat"] is False
     finished = Mock()
     finished.poll.return_value = 0
     alive = Mock()
@@ -438,7 +605,19 @@ def selftest():
     cleanup_owned([finished, alive], time.monotonic() + 1)
     finished.terminate.assert_not_called()
     alive.terminate.assert_called_once()
-    print("RUNNER_SELFTEST_PASS environment/exit/mutation/scorer/pause/owned-cleanup fixtures")
+    folder, request = Mock(), Mock()
+    folder.__truediv__ = Mock(return_value=request)
+    request.exists.return_value = request.is_symlink.return_value = False
+    check_stop_request(folder)
+    request.exists.return_value = request.is_file.return_value = True
+    with patch.dict(check_stop_request.__globals__, {"no_reparse": Mock()}):
+        try:
+            check_stop_request(folder)
+        except Failed as exc:
+            assert str(exc).startswith("CANCELLED:")
+        else:
+            raise AssertionError("Local stop request did not fail the run")
+    print("RUNNER_SELFTEST_PASS environment/exit/mutation/scorer/pause/campaign/owned-cleanup fixtures")
     return 0
 
 

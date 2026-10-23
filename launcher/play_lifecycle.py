@@ -70,7 +70,7 @@ def no_reparse(path, new=False):
     return path
 
 
-def environment(source, seat, diagnostics=True):
+def environment(source, seat, diagnostics=True, campaign=False, deferred=False, profile=None, hub_spawn=-1, skip_nis=False):
     env = {key: value for key, value in source.items() if not key.upper().startswith("COOP_PROBE_")}
     values = {
         "AUTOTEST": "ExecutionPath", "INPUTBOT": "0", "PLAYBOT": "0", "ACTIONBOT": "0",
@@ -80,6 +80,27 @@ def environment(source, seat, diagnostics=True):
         "CONTENT_SHA256": CRITICAL,
         "DIAGNOSTICS": "1" if diagnostics else "0",
     }
+    if campaign:
+        # Retail route: New Game -> hub -> mission; the campaign bot drives only host menus/hub.
+        values.pop("AUTOTEST")
+        values.pop("AREA")
+        values.update(CAMPAIGN="1", CAMPAIGN_FIXTURE="1")
+        if deferred:
+            # Launcher flow: the game opens first; the role arrives later in <sandbox>/connect.json.
+            values["NET_MODE"] = "deferred"
+        if profile:
+            values["PROFILE"] = str(profile)
+        if hub_spawn >= 0:
+            values["HUB_SPAWN"] = str(hub_spawn)
+        if skip_nis:
+            values["SKIP_NIS"] = "1"
+        if os.environ.get("FOF_RESEARCH_HUB_SOUND") == "0":
+            values["HUB_PARTNER_SOUND"] = "0"
+        if os.environ.get("FOF_RESEARCH_SIDEKICK_TEST") == "1":
+            values["HUB_SIDEKICK_TEST"] = "1"
+        # The launcher passes its translated partner-wait notice; tests may pass one to check a language renders.
+        if os.environ.get("FOF_RESEARCH_WAIT_TEXT"):
+            values["WAIT_TEXT"] = os.environ["FOF_RESEARCH_WAIT_TEXT"]
     env.update({"COOP_PROBE_" + key: value for key, value in values.items()})
     return env
 
@@ -300,13 +321,24 @@ def run(args):
             event("PREFLIGHT_PASS", seat=SEATS[i], language=language)
         lane = lane_module.GameLane(args.seconds).acquire()
         summary["gameslot"] = {"owner": lane.owner, "slots": lane.slots, "ttl_seconds": lane.ttl}
+        host_profile = boxes[0].parent / (boxes[0].name + "-profile")
+        if args.seed_save:
+            # Start-together host with an existing campaign: its slot list shows a used slot, the partner's is empty.
+            saves = host_profile / "Documents" / "Activision" / "Spider-Man FoF" / "Saved Games"
+            saves.mkdir(parents=True)
+            (saves / "SavedGame1.SFOFSaveGame").write_bytes(Path(args.seed_save).read_bytes())
+            event("HOST_PROFILE_SEEDED", slots=[1])
         for i, seat in enumerate(SEATS):
             process = popen([str(ROOT / "probe" / "native-launcher.exe"), "--play",
                 str(ROOT / "test" / LANGUAGES[i].lower() / "Game.exe"), str(boxes[i])],
-                launcher_logs[i], environment(os.environ, seat, not args.quiet), seat + "-launcher")
+                launcher_logs[i], environment(os.environ, seat, not args.quiet, args.campaign, args.deferred_connect > 0 or args.join_at_hub,
+                            host_profile if (args.join_at_hub or args.together) and seat == "host" else None, args.hub_spawn,
+                            args.skip_cutscenes == "both" or (args.skip_cutscenes == "host" and seat == "host")), seat + "-launcher")
             launchers.append(process)
             lane.register_launcher(process)
         last_report = 0
+        frozen_since, connected = None, False
+        rejoin_stage = 0  # 0 joined once, 1 peer closed, 2 replacement peer started, 3 rejoined
         while True:
             outputs, parsed = [], []
             for i, seat in enumerate(SEATS):
@@ -323,19 +355,62 @@ def run(args):
                     bad = FAILURE.search(probe_text + launcher_text)
                     source = probe_text + launcher_text
                     raise Failed(seat + ": " + source[bad.start():].splitlines()[0][:240])
-                if FIXTURE.search(probe_text) or "fixture=1" in probe_text:
+                # --campaign deliberately uses the campaign menu/hub bot; nothing else may be a fixture.
+                checked = probe_text.replace("CAMPAIGN CONFIG enabled=1 fixture=1 research_autotest=0", "") if args.campaign else probe_text
+                if FIXTURE.search(checked) or "fixture=1" in checked:
                     raise Failed(seat + ": unexpected input/test fixture marker in real-play QA")
-                if launchers[i].poll() is not None:
+                dropped = args.rejoin and seat == "peer" and rejoin_stage == 1
+                if launchers[i].poll() is not None and not dropped:
                     raise Failed(seat + ": launcher exited before requested close")
-                if games[i] is not None and api.exit(games[i]) is not None:
+                if games[i] is not None and api.exit(games[i]) is not None and not dropped:
                     raise Failed(seat + ": game exited before requested close")
                 outputs.append(probe_text)
                 parsed.append(rows(probe_text, 120 if args.quiet else 1))
+            if args.rejoin and rejoin_stage == 0 and connected and "CAMPAIGN ASSERT JOIN_COMPLETE" in outputs[1]:
+                # Both in the hub after the first join: the joiner leaves; the host must keep playing alone.
+                if api.close_windows([games[1]]).get(games[1]["pid"], 0) < 1:
+                    raise Failed("peer: close request for the drop was not posted")
+                rejoin_stage = 1
+                event("PEER_DROPPED_AT_HUB")
+            if rejoin_stage == 1 and "NET PARTNER_LOST" in outputs[0] and launchers[1].poll() is not None:
+                if launchers[1].returncode != 0:
+                    raise Failed("peer: dropped launcher exit " + str(launchers[1].returncode))
+                boxes[1] = ROOT / ("run-play-lifecycle-" + name + "-peer2")
+                launcher_logs[1] = result / "peer2-launcher.log"
+                games[1] = None
+                launchers[1] = popen([str(ROOT / "probe" / "native-launcher.exe"), "--play",
+                    str(ROOT / "test" / LANGUAGES[1].lower() / "Game.exe"), str(boxes[1])],
+                    launcher_logs[1], environment(os.environ, "peer", not args.quiet, args.campaign, True, None), "peer2-launcher")
+                lane.register_launcher(launchers[1])
+                connected, rejoin_stage = False, 2
+                event("HOST_CONTINUED_ALONE_REPLACEMENT_PEER_STARTED")
+            if args.join_at_hub and not connected and all(games):
+                # Both linked at once; the host bot plays New Game alone and the joiner waits at its main menu.
+                for i, role in enumerate(("host", "join")):
+                    temporary = boxes[i] / "connect.json.tmp"
+                    temporary.write_text(json.dumps({"role": role}, separators=(",", ":")), encoding="utf-8")
+                    os.replace(temporary, boxes[i] / "connect.json")
+                connected = True
+                if rejoin_stage == 2:
+                    rejoin_stage = 3
+                event("JOIN_AT_HUB_ROLES_WRITTEN", rejoin=rejoin_stage == 3)
+            if args.deferred_connect and not connected:
+                if any(re.search(r"^NET (?:opening|READY)", output, re.M) for output in outputs):
+                    raise Failed("A deferred game connected before its role was written")
+                if all("NET DEFERRED_WAIT" in output for output in outputs):
+                    frozen_since = frozen_since or time.monotonic()
+                    if time.monotonic() - frozen_since >= args.deferred_connect:
+                        for i, role in enumerate(("host", "join")):
+                            temporary = boxes[i] / "connect.json.tmp"
+                            temporary.write_text(json.dumps({"role": role}, separators=(",", ":")), encoding="utf-8")
+                            os.replace(temporary, boxes[i] / "connect.json")
+                        connected = True
+                        event("DEFERRED_CONNECT_WRITTEN", waited_seconds=round(time.monotonic() - frozen_since, 1))
             common = compare(*parsed, stride=120 if args.quiet else 1)
             summary["logged_common_samples"] = len(set(parsed[0]) & set(parsed[1]))
             summary["common_frames"] = common
             ready = [bool(re.search(r"^NET READY role=" + str(i + 1) + r"$", outputs[i], re.M)) for i in range(2)]
-            if all(games) and all(ready) and common >= args.frames:
+            if all(games) and all(ready) and common >= args.frames and (not args.rejoin or rejoin_stage == 3):
                 event("MATCHING_IDLE_THRESHOLD", common_frames=common)
                 break
             now = time.monotonic()
@@ -472,6 +547,10 @@ def selftest():
     else:
         raise AssertionError("Missing quiet sample accepted")
     assert environment({}, "host", False)["COOP_PROBE_DIAGNOSTICS"] == "0"
+    campaign = environment({}, "peer", True, True)
+    assert campaign["COOP_PROBE_CAMPAIGN"] == "1" and campaign["COOP_PROBE_CAMPAIGN_FIXTURE"] == "1"
+    assert "COOP_PROBE_AUTOTEST" not in campaign and "COOP_PROBE_AREA" not in campaign
+    assert environment({}, "host", True, True, True)["COOP_PROBE_NET_MODE"] == "deferred"
     print("OWN_PLAY_LIFECYCLE_SELFTEST_PASS rows/invalid/divergence/environment/quiet-stride")
     return 0
 
@@ -483,6 +562,21 @@ def main(argv=None):
     parser.add_argument("--frames", type=int, default=300)
     parser.add_argument("--one-sided-stop", action="store_true", help="Close only the owned host; peer must receive explicit normal-stop and exit0")
     parser.add_argument("--quiet", action="store_true", help="Verify sparse logging every120 ticks and no diagnostic images; live checksums still run every tick")
+    parser.add_argument("--join-at-hub", action="store_true",
+                        help="With --campaign: host plays New Game alone to the hub, then the joiner catches up and both play on")
+    parser.add_argument("--rejoin", action="store_true",
+                        help="With --join-at-hub: after the first join the joiner closes its game; the host keeps playing and a new joiner rejoins at the hub")
+    parser.add_argument("--skip-cutscenes", nargs="?", const="both", choices=("both", "host"), default=None,
+                        help="Campaign bot skips movies/cutscenes the game lets players skip: on both seats (faster runs) or only the host (the peer watches; checks that the hub waits for it)")
+    parser.add_argument("--hub-spawn", type=int, default=-1, metavar="INDEX",
+                        help="Research: after the hub is reached, call the game's spawn-character native once more with INDEX (both seats)")
+    parser.add_argument("--together", action="store_true",
+                        help="With --campaign: both games start together from the main menu (host keeps saves in a profile)")
+    parser.add_argument("--seed-save", metavar="FILE",
+                        help="With --together: put this save in the host profile's slot 1 first")
+    parser.add_argument("--deferred-connect", type=int, default=0, metavar="SECONDS",
+                        help="With --campaign: open both games first, keep their menus frozen for SECONDS, then hand out the roles")
+    parser.add_argument("--campaign", action="store_true", help="Use the retail campaign route (bot drives host menus/hub) instead of the research scenario")
     parser.add_argument("--selftest", action="store_true", help="Own parser/environment fixtures only; no game launch")
     args = parser.parse_args(argv)
     if args.selftest:
@@ -491,8 +585,23 @@ def main(argv=None):
         parser.error("--name must be lowercase letters/digits with single separating hyphens")
     if args.name and len(args.name) > 48:
         parser.error("--name must have at most48 characters")
-    if not 60 <= args.seconds <= 240 or not 300 <= args.frames <= 3600:
-        parser.error("--seconds must be60..240; --frames must be300..3600")
+    if args.deferred_connect:
+        # Retired (run partner-deferred-243): since join-at-hub an opened game is an ordinary solo game, and the
+        # launcher's Join always restarts the friend's game fresh. Two opened games both played New Game alone before
+        # the roles arrived, which real play never does. --join-at-hub covers "open, play, then link".
+        parser.error("--deferred-connect is retired: an opened game now plays alone and Join restarts the friend's game; use --join-at-hub")
+    if args.deferred_connect and (not args.campaign or not 1 <= args.deferred_connect <= 300):
+        parser.error("--deferred-connect must be 1..300 seconds and requires --campaign")
+    if args.together and (not args.campaign or args.join_at_hub or args.deferred_connect):
+        parser.error("--together requires --campaign and excludes --join-at-hub/--deferred-connect")
+    if args.seed_save and not (args.together and Path(args.seed_save).is_file()):
+        parser.error("--seed-save requires --together and an existing file")
+    if args.rejoin and not args.join_at_hub:
+        parser.error("--rejoin requires --join-at-hub")
+    if args.join_at_hub and (not args.campaign or args.deferred_connect):
+        parser.error("--join-at-hub requires --campaign and excludes --deferred-connect")
+    if not 60 <= args.seconds <= (1500 if args.join_at_hub else 900 if args.campaign else 240) or not 300 <= args.frames <= 3600:
+        parser.error("--seconds must be60..240 (60..900 with --campaign); --frames must be300..3600")
     return run(args)
 
 

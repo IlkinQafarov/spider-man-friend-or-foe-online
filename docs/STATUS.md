@@ -50,6 +50,23 @@ Both new runs reported actual and canonical US layout, with 102 keyboard descrip
 
 Run **036**, also scenario 11, passed the quiet fixture-disabled gameplay lifecycle: at least 361 common ticks, four sparse observations, no diagnostic game captures, host-only owned-window close, ordered peer stop and normal exits. The pre-game movie/bootstrap route was slow: readiness was still pending at 212 seconds and the gate completed at about 221 seconds within its 240-second bound. This is startup/idle/shutdown evidence, not a physical-input or retail-campaign pass. It uses the controlled research bootstrap.
 
+## Retail campaign bootstrap (scenario 12, private feature branch)
+
+| Check | Observed result | Practical limit |
+| --- | --- | --- |
+| Runs 037-039 | Stopped at native save notices, then ran out of the 300 s budget on the first-level loading screen | Retained as FAIL |
+| Runs 044-050 | Both seats reached the native Helicarrier hub. Hub walking needed (1) held stick input re-applied after the campaign input clears, (2) a host-only bot that walks P1 into the `LevelSelect01` trigger, (3) peer following host P1 position in the hub only, and (4) excluding position from the Accept confirmation | Retained as FAIL; each fixed one blocker |
+| Run 051 | **PASS.** English host and Russian peer: native New Game, save prompts, hub, walk to the mission terminal, mutual Accept, synchronized Tokyo load, then 600 consecutive equal sampled-state ticks. All games, launchers and relays exited 0; 156,624 bytes each way, 0 discarded | One PC, mock Steam, bot input, first mission only |
+| Run 052 | **PASS**, identical repeat of 051 with the same build and options | Same limits |
+| Runs 053-058 | Retail tutorial hints pause gameplay (native mode 1) until OK is pressed; the research travel fixture is unreliable on the campaign route; a network bug dropped a checkpoint message that arrived together with the peer's "finished" signal (fixed, with a regression self-test) | Retained as FAIL |
+| Runs 059, 060 | **PASS.** After tutorials are accepted through lockstep input, a test fixture calls the game's own mission-end routine on both seats on the same tick. Both show the results screen, leave it on the same tick, reload the hub through the shared checkpoint and agree on the progress bytes, then finish and exit normally | The fixture skips the real end-of-level script, so mission completion is **not** shown to be recorded (progress changed at the first tutorial hint, not at mission end) |
+| Run 061 | **PASS.** Two cycles: mission, end, hub, walk to the terminal again, second mission start, 2,400 equal sampled ticks | Same limits |
+| Run 064 | **PASS.** The launcher's play path (`--play`, unlimited) on the campaign route, bot driving only host menus/hub: 361 matching frames, host-only close, ordered peer stop, normal exits | Took about 9 minutes to reach gameplay with unskipped movies |
+
+The GUI's Play mode now uses this campaign route with the host's controls driving menus and the hub. The automated connection check keeps the bounded research scenario. Only New Game and the first slot are accepted.
+
+Hub movement is not deterministic (it uses wall-clock time), so the peer's Spider-Man is snapped to the host's position there. That is acceptable in the hub, which has no enemies or progress, and is not used inside missions.
+
 ## Implemented, with incomplete validation
 
 The code includes two-peer input exchange, native player routing, fixed gameplay timing, selected state checks, complete-pack language verification, host/join UI, an x64 native relay and ordered user-stop handling. The real-input path accepts keyboard/controller providers, but physical device usability remains untested. The packaging helper creates an explicit asset-free file set, but no release package is offered here.

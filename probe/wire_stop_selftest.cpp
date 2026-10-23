@@ -21,9 +21,9 @@ SOCKET listenAt(std::uint16_t& port){
 }
 struct Pair {
     InputWire a,b;
-    explicit Pair(unsigned delay=3){std::uint16_t port=0;SOCKET reservation=listenAt(port);closesocket(reservation);Digest d={};
-        auto host=std::async(std::launch::async,[&]{return a.Open(true,"127.0.0.1",port,d,d,delay,1500);});
-        bool client=b.Open(false,"127.0.0.1",port,d,d,delay,1500);bool server=host.get();require(client&&server,"pair open");
+    explicit Pair(unsigned delay=3,unsigned timeoutMs=1500){std::uint16_t port=0;SOCKET reservation=listenAt(port);closesocket(reservation);Digest d={};
+        auto host=std::async(std::launch::async,[&]{return a.Open(true,"127.0.0.1",port,d,d,delay,timeoutMs);});
+        bool client=b.Open(false,"127.0.0.1",port,d,d,delay,timeoutMs);bool server=host.get();require(client&&server,"pair open");
     }
 };
 void ticks(Pair& p,unsigned count,unsigned delay=3){
@@ -48,16 +48,72 @@ void finite(){Pair p;ticks(p,40);auto a=std::async(std::launch::async,[&]{return
 struct Hello {std::uint32_t magic,version,role,delay;Digest build,scenario;};
 struct Frame {std::uint32_t magic,tick;Actions actions;std::uint64_t state;};
 static_assert(sizeof(Hello)==80&&sizeof(Frame)==128,"raw fixture ABI");
+struct PhasePacket {std::uint32_t magic,sequence;PhaseState state;std::uint64_t reserved;};
+static_assert(sizeof(PhasePacket)==128,"raw phase ABI");
+PhaseState phase(unsigned role,unsigned sequence){
+    PhaseState s={};s.kind=sequence%2?phaseLoad:phaseMenu;s.id=0xfeed0000u+sequence;s.selection=role;s.flags=sequence%4;
+    s.identity[sequence%32]=std::uint8_t(role+1);s.content[31]=std::uint8_t(0xae^sequence);
+    for(unsigned i=0;i<8;i++)s.auxiliary[i]=sequence*100+i+role*10000;return s;
+}
+bool equal(const PhaseState& a,const PhaseState& b){return a.kind==b.kind&&a.id==b.id&&a.selection==b.selection&&a.flags==b.flags&&a.identity==b.identity&&a.content==b.content&&a.auxiliary==b.auxiliary;}
+void phaseRange(Pair& p,unsigned first,unsigned end){
+    for(unsigned sequence=first;sequence<end;sequence++){
+        PhaseState a=phase(0,sequence),b=phase(1,sequence),ra={},rb={};
+        auto f=std::async(std::launch::async,[&]{return p.a.ExchangePhase(sequence,a,ra);});bool ok=p.b.ExchangePhase(sequence,b,rb);
+        require(f.get()&&ok&&equal(ra,b)&&equal(rb,a),"phase state altered, mixed, or semantically auto-approved");
+    }
+}
+void phaseAndInput(){Pair p;phaseRange(p,0,8);ticks(p,24);phaseRange(p,8,20);auto f=std::async(std::launch::async,[&]{return p.a.Finish();});require(p.b.Finish()&&f.get(),"FIN after phase/input interleave");require(p.a.Error().empty()&&p.b.Error().empty(),"phase/input error");}
+void phaseRemoteStop(){Pair p;PhaseState s=phase(0,0),r={};auto f=std::async(std::launch::async,[&]{return p.a.ExchangePhase(0,s,r);});Sleep(40);auto start=GetTickCount64();require(p.b.RequestStop(),"phase remote STOP send");require(!f.get()&&p.a.PeerStopped()&&p.a.Error().empty(),"phase wait STOP classification");require(GetTickCount64()-start<500,"phase STOP wake too slow");}
+void phaseLocalStop(){Pair p;PhaseState s=phase(0,0),r={};auto f=std::async(std::launch::async,[&]{return p.a.ExchangePhase(0,s,r);});Sleep(40);auto start=GetTickCount64();require(p.a.RequestStop(),"phase local STOP send");require(!f.get()&&p.a.Error().empty(),"local phase stop diagnosis");require(GetTickCount64()-start<500,"local phase STOP wake too slow");require(until([&]{return p.b.PeerStopped();}),"phase local STOP missing");}
+void phaseDisconnect(){Pair p;PhaseState s=phase(0,0),r={};auto f=std::async(std::launch::async,[&]{return p.a.ExchangePhase(0,s,r);});Sleep(40);p.b.Close();require(!f.get()&&!p.a.Error().empty()&&!p.a.PeerStopped(),"phase EOF ignored");}
+void phaseTimeout(){Pair p;PhaseState s=phase(0,0),r={};require(!p.a.ExchangePhase(0,s,r)&&!p.a.Error().empty(),"unanswered phase did not fail");}
+void idleThenExchange(){Pair p(3,300);Sleep(900);require(p.a.Error().empty()&&p.b.Error().empty(),"idle beyond API timeout broke connection");phaseRange(p,0,3);ticks(p,8);auto f=std::async(std::launch::async,[&]{return p.a.Finish();});bool b=p.b.Finish();require(f.get()&&b&&p.a.Error().empty()&&p.b.Error().empty(),"exchange after idle failed");}
+struct RawPeer {
+    InputWire wire;SOCKET peer=INVALID_SOCKET;
+    explicit RawPeer(unsigned timeoutMs=1500){std::uint16_t port=0;SOCKET listener=listenAt(port);Digest d={};auto f=std::async(std::launch::async,[&]{return wire.Open(false,"127.0.0.1",port,d,d,3,timeoutMs);});
+        peer=accept(listener,0,0);closesocket(listener);require(peer!=INVALID_SOCKET,"phase raw accept");Hello h={};require(bytes(peer,&h,sizeof(h),false)&&h.version==4,"phase hello receive");h.role=0;require(bytes(peer,&h,sizeof(h),true),"phase hello reply");require(f.get(),"phase raw handshake");}
+    ~RawPeer(){if(peer!=INVALID_SOCKET)closesocket(peer);}
+};
+void badPhase(unsigned mutation){
+    RawPeer r;PhasePacket packet={0x31534850,0,phase(0,0),0};
+    if(mutation==0)packet.state.kind=3;if(mutation==1)packet.state.flags=4;if(mutation==2)packet.reserved=1;if(mutation==3)packet.sequence=1;
+    require(bytes(r.peer,&packet,sizeof(packet),true),"malformed phase send");
+    if(mutation==4)require(bytes(r.peer,&packet,sizeof(packet),true),"duplicate phase send");
+    if(mutation==5)for(unsigned i=1;i<=16;i++){packet.sequence=i;require(bytes(r.peer,&packet,sizeof(packet),true),"phase queue fill");}
+    require(until([&]{return !r.wire.Error().empty();}),"malformed/duplicate/overflow phase accepted");require(!r.wire.PeerStopped(),"bad phase became STOP");
+}
+void invalidLocalPhase(){Pair p;PhaseState s=phase(0,0),r={};s.flags=4;require(!p.a.ExchangePhase(0,s,r)&&p.a.Error().find("Invalid local phase")!=std::string::npos,"invalid local phase accepted");}
+void invalidLocalPhaseSequence(){Pair p;PhaseState s=phase(0,0),r={};require(!p.a.ExchangePhase(1,s,r)&&p.a.Error().find("Invalid local phase")!=std::string::npos,"local phase gap accepted");}
+void phaseFinWake(){RawPeer r;PhaseState s=phase(0,0),out={};auto f=std::async(std::launch::async,[&]{return r.wire.ExchangePhase(0,s,out);});PhasePacket received={};require(bytes(r.peer,&received,sizeof(received),false),"phase FIN fixture receive");Frame fin={0x314e4946,0,{},0};auto start=GetTickCount64();require(bytes(r.peer,&fin,sizeof(fin),true),"phase FIN send");require(!f.get()&&r.wire.Error().empty()&&!r.wire.PeerStopped(),"phase FIN wake classification");require(GetTickCount64()-start<500,"phase FIN wake too slow");}
+// Run 057: the peer's last phase and its FIN can arrive together; the queued
+// phase must still complete the exchange, and the following Finish must succeed.
+void phaseThenFin(){for(unsigned n=0;n<20;n++){RawPeer r;PhaseState s=phase(0,0),out={};PhasePacket packet={0x31534850,0,phase(1,0),0},received={};Frame fin={0x314e4946,0,{},0};
+    auto f=std::async(std::launch::async,[&]{return r.wire.ExchangePhase(0,s,out);});
+    require(bytes(r.peer,&received,sizeof(received),false),"phase+FIN fixture receive");
+    require(bytes(r.peer,&packet,sizeof(packet),true)&&bytes(r.peer,&fin,sizeof(fin),true),"phase+FIN send");
+    require(f.get()&&equal(out,packet.state),"phase queued before FIN was dropped");
+    require(r.wire.Finish()&&r.wire.Error().empty(),"Finish after phase+FIN failed");}}
+void partialFrameTimeout(unsigned operation){
+    RawPeer r(300);Actions actions={},remote={};PhaseState local=phase(0,0),out={};
+    if(operation==1)for(unsigned i=0;i<3;i++)require(r.wire.Step(i,actions,remote),"partial Step setup");
+    auto start=GetTickCount64();auto f=std::async(std::launch::async,[&]{return operation==0?r.wire.ExchangePhase(0,local,out):operation==1?r.wire.Step(3,actions,remote):r.wire.Finish();});
+    Frame received={};for(unsigned i=0;i<(operation==1?4u:1u);i++)require(bytes(r.peer,&received,sizeof(received),false),"partial fixture receive");
+    PhasePacket stalled={0x31534850,0,phase(0,0),0};require(bytes(r.peer,&stalled,16,true),"partial fixture prefix");
+    require(!f.get()&&r.wire.Error().find("timed out")!=std::string::npos,"partial packet hid API timeout");r.wire.Close();
+    require(GetTickCount64()-start<1200,"partial reader failed to unblock after timeout");
+}
 void malformed(std::uint32_t magic,std::uint32_t tick,bool badPayload,const char* expected){
     std::uint16_t port=0;SOCKET listener=listenAt(port);InputWire wire;Digest d={};auto opened=std::async(std::launch::async,[&]{return wire.Open(false,"127.0.0.1",port,d,d,3,1500);});
-    SOCKET peer=accept(listener,0,0);closesocket(listener);require(peer!=INVALID_SOCKET,"raw accept");Hello hello={};require(bytes(peer,&hello,sizeof(hello),false),"hello receive");require(hello.version==3,"not protocol3");hello.role=0;require(bytes(peer,&hello,sizeof(hello),true),"hello reply");require(opened.get(),"raw open");
+    SOCKET peer=accept(listener,0,0);closesocket(listener);require(peer!=INVALID_SOCKET,"raw accept");Hello hello={};require(bytes(peer,&hello,sizeof(hello),false),"hello receive");require(hello.version==4,"not protocol4");hello.role=0;require(bytes(peer,&hello,sizeof(hello),true),"hello reply");require(opened.get(),"raw open");
     Frame marker={magic,tick,{},0};if(badPayload)marker.actions[1]=.25f;require(bytes(peer,&marker,sizeof(marker),true),"bad marker send");require(until([&]{return !wire.Error().empty();}),"bad marker accepted");require(wire.Error().find(expected)!=std::string::npos,"wrong marker diagnosis");require(!wire.PeerStopped()&&!wire.RequestStop(),"malformed became normal stop");closesocket(peer);
 }
-void oldProtocol(){
-    std::uint16_t port=0;SOCKET listener=listenAt(port);InputWire wire;Digest d={};auto opened=std::async(std::launch::async,[&]{return wire.Open(false,"127.0.0.1",port,d,d,3,1500);});SOCKET peer=accept(listener,0,0);closesocket(listener);Hello hello={};require(bytes(peer,&hello,sizeof(hello),false),"old hello read");hello.role=0;hello.version=2;require(bytes(peer,&hello,sizeof(hello),true),"old hello send");require(!opened.get()&&wire.Error().find("protocol mismatch")!=std::string::npos,"old protocol accepted");closesocket(peer);
+void oldProtocol(unsigned version){
+    std::uint16_t port=0;SOCKET listener=listenAt(port);InputWire wire;Digest d={};auto opened=std::async(std::launch::async,[&]{return wire.Open(false,"127.0.0.1",port,d,d,3,1500);});SOCKET peer=accept(listener,0,0);closesocket(listener);Hello hello={};require(bytes(peer,&hello,sizeof(hello),false),"old hello read");hello.role=0;hello.version=version;require(bytes(peer,&hello,sizeof(hello),true),"old hello send");require(!opened.get()&&wire.Error().find("protocol mismatch")!=std::string::npos,"old protocol accepted");closesocket(peer);
 }
 }
 int main(){
+    setvbuf(stdout,0,_IONBF,0);
     WSADATA data={};if(WSAStartup(MAKEWORD(2,2),&data))return 2;
     struct Test {const char* name;void(*run)();};
     Test tests[]={
@@ -69,7 +125,20 @@ int main(){
         {"invalid STOP payload",[]{malformed(0x31504f53,0,true,"Invalid stop");}},
         {"invalid input order",[]{malformed(0x314d5246,4,false,"out-of-order");}},
         {"invalid FIN order",[]{malformed(0x314e4946,1,false,"Invalid finish");}},
-        {"protocol2 rejection",oldProtocol}
+        {"phase opaque state and independent gameplay sequence",phaseAndInput},
+        {"phase remote STOP before first Step",phaseRemoteStop},
+        {"phase local STOP before first Step",phaseLocalStop},
+        {"phase EOF failure",phaseDisconnect},{"phase timeout failure",phaseTimeout},
+        {"phase invalid kind",[]{badPhase(0);}},{"phase invalid flags",[]{badPhase(1);}},
+        {"phase nonzero reserved",[]{badPhase(2);}},{"phase out of order",[]{badPhase(3);}},
+        {"phase duplicate rejection",[]{badPhase(4);}},{"phase queue bound",[]{badPhase(5);}},
+        {"phase invalid local flags",invalidLocalPhase},{"phase invalid local sequence",invalidLocalPhaseSequence},
+        {"phase wait FIN wake",phaseFinWake},{"phase queued before FIN x20",phaseThenFin},
+        {"idle longer than API timeout then exchange",idleThenExchange},
+        {"partial packet bounded phase wait",[]{partialFrameTimeout(0);}},
+        {"partial packet bounded Step wait",[]{partialFrameTimeout(1);}},
+        {"partial packet bounded Finish wait",[]{partialFrameTimeout(2);}},
+        {"protocol2 rejection",[]{oldProtocol(2);}},{"protocol3 rejection",[]{oldProtocol(3);}}
     };
     unsigned failures=0;for(const auto& test:tests){try{test.run();printf("PASS %s\n",test.name);}catch(const std::exception& e){++failures;printf("FAIL %s: %s\n",test.name,e.what());}}
     WSACleanup();printf("WIRE_STOP_SELFTEST %u/%u passed\n",unsigned(sizeof(tests)/sizeof(tests[0]))-failures,unsigned(sizeof(tests)/sizeof(tests[0])));return failures?1:0;

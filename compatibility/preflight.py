@@ -121,13 +121,36 @@ def hash_file(path):
     return [before.st_size, h.hexdigest()]
 
 
-def verify_records(baseline, found, hasher=hash_file):
+PROXY_MARKER = "COOP_PROXY_PROBE".encode("utf-16-le")
+
+
+def own_proxy_file(name, found):
+    """native-launcher puts its d3d9 proxy and the chain copy beside Game.exe while the game runs and
+    replaces an older build of it before launch. Accept this add-on's proxy (every build carries the
+    UTF-16 name COOP_PROXY_PROBE) and the chain copy next to it; any other d3d9 stays an unknown DLL."""
+    if name == "d3d9_chain.dll":
+        return "d3d9.dll" in found and own_proxy_file("d3d9.dll", found)
+    if name != "d3d9.dll":
+        return False
+    try:
+        path = Path(found[name])
+        no_reparse(path)
+        if path.stat().st_size > 8 * 1024 * 1024:
+            return False
+        return PROXY_MARKER in path.read_bytes()
+    except (Rejected, OSError):
+        return False
+
+
+def verify_records(baseline, found, hasher=hash_file, own_proxy=own_proxy_file):
     core, packs = baseline["critical"], baseline["locales"]
     expected = set(core) | set(next(iter(packs.values()))["files"])
     missing = expected - found.keys()
     if missing:
         raise Rejected("Missing runtime file: " + sorted(missing)[0])
     for path in sorted(found):
+        if path in ("d3d9.dll", "d3d9_chain.dll") and own_proxy is not None and own_proxy(path, found):
+            continue
         if path.endswith(".dll") and path != "binkw32.dll":
             raise Rejected("Unknown DLL: " + path)
         if path not in expected and path not in IGNORE and not path.startswith("gamelog/"):

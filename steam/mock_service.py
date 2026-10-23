@@ -168,5 +168,5 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', type=int, default=49480); parser.add_argument('--seconds', type=int, default=300)
     args = parser.parse_args()
-    if not 1024 <= args.port <= 65535 or not 1 <= args.seconds <= 600: parser.error('Invalid port/duration')
+    if not 1024 <= args.port <= 65535 or not 1 <= args.seconds <= 1200: parser.error('Invalid port/duration')
     Broker(args.port).run(args.seconds)

@@ -24,6 +24,7 @@ DIRECTORIES = {
     "qa": {".py"},
     "steam": {".py", ".cpp", ".cmd", ".md"},
     "steam/native": {".cpp", ".hpp", ".cmd", ".md"},
+    "proxy": {".cpp", ".cmd", ".md", ".py"},
     "docs": {".md", ".svg"},
 }
 SPECIAL = {"compatibility/baseline.json", "steam/native/steam_appid.txt",
@@ -81,8 +82,8 @@ def inspect_text(name, raw):
 def snapshot(name):
     if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name) or len(name) > 72:
         raise Rejected("Use a simple new snapshot name")
-    names = subprocess.check_output(["git", "ls-files", "--cached", "--others",
-        "--exclude-standard", "-z"], cwd=ROOT).decode("utf-8").split("\0")
+    # Committed files only: uncommitted work in progress (another agent's, or unfinished) never goes public.
+    names = subprocess.check_output(["git", "ls-files", "--cached", "-z"], cwd=ROOT).decode("utf-8").split("\0")
     names = sorted(set(n for n in names if n))
     candidates, seen = [], set()
     for source in names:

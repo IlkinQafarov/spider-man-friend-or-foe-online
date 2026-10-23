@@ -20,6 +20,12 @@ probe/*
 !probe/*.inc
 !probe/*.cmd
 !probe/README.md
+!proxy/
+proxy/*
+!proxy/*.cpp
+!proxy/*.py
+!proxy/*.cmd
+!proxy/README.md
 !steam/
 steam/*
 !steam/*.py

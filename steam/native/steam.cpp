@@ -80,7 +80,7 @@ class Steam final:public Backend {
     Id ownedLobby_=0,requestedLobby_=0;
     std::map<Id,std::pair<int,unsigned>> pending_;
 #define FLAT(name,result,...) using name##Type=result(__cdecl*)(__VA_ARGS__); name##Type name=nullptr
-    FLAT(InitFlat,int,char*); FLAT(Shutdown,void); FLAT(GetHSteamPipe,int);
+    FLAT(InitFlat,int,char*); FLAT(Init,bool); FLAT(Shutdown,void); FLAT(GetHSteamPipe,int);
     FLAT(ManualDispatch_Init,void); FLAT(ManualDispatch_RunFrame,void,int);
     FLAT(ManualDispatch_GetNextCallback,bool,int,Callback*);
     FLAT(ManualDispatch_FreeLastCallback,void,int);
@@ -139,7 +139,9 @@ public:
                 if(std::strcmp(marker(),"FOF_MOCK_NO_ACCOUNT")) throw Failure("Invalid own-code ABI fixture marker");
             }
 #define LOAD(name) name=exportFunction<name##Type>(dll_,"SteamAPI_" #name)
-            LOAD(InitFlat); LOAD(Shutdown); LOAD(GetHSteamPipe); LOAD(ManualDispatch_Init); LOAD(ManualDispatch_RunFrame);
+            // SDKs before InitFlat export only SteamAPI_Init (bool); either entry point is accepted.
+            if(GetProcAddress(dll_,"SteamAPI_InitFlat")) LOAD(InitFlat); else LOAD(Init);
+            LOAD(Shutdown); LOAD(GetHSteamPipe); LOAD(ManualDispatch_Init); LOAD(ManualDispatch_RunFrame);
             LOAD(ManualDispatch_GetNextCallback); LOAD(ManualDispatch_FreeLastCallback); LOAD(ManualDispatch_GetAPICallResult);
             LOAD(SteamUser_v023); LOAD(SteamMatchmaking_v009); LOAD(SteamNetworkingMessages_SteamAPI_v002);
             LOAD(ISteamUser_GetSteamID); LOAD(ISteamUser_BLoggedOn); LOAD(ISteamMatchmaking_CreateLobby); LOAD(ISteamMatchmaking_JoinLobby);
@@ -161,7 +163,7 @@ public:
             configureLiveAppId();
         }
         char error[1024]{};
-        const int result=InitFlat(error);
+        const int result=InitFlat?InitFlat(error):(Init()?0:1);
         if(result!=0) throw Failure("Steam initialization failed ("+std::to_string(result)+")");
         initialized_=true; ownedLobby_=0; requestedLobby_=lobby; pending_.clear();
         user_=SteamUser_v023(); matchmaking_=SteamMatchmaking_v009(); network_=SteamNetworkingMessages_SteamAPI_v002();

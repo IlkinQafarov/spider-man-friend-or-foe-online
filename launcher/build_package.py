@@ -26,6 +26,7 @@ PAYLOAD = {
     "launcher/fof-private-launcher.exe": (0x8664, False),
     "probe/native-launcher.exe": (0x14C, False),
     "probe/native-probe.dll": (0x14C, True),
+    "probe/d3d9.dll": (0x14C, True),
     "steam/native/native-relay.exe": (0x8664, False),
     "steam/native/steam_appid.txt": None,
     "compatibility/baseline.json": None,
@@ -33,27 +34,80 @@ PAYLOAD = {
 START = b'@echo off\r\nsetlocal\r\nstart "" "%~dp0launcher\\fof-private-launcher.exe"\r\n'
 README = """# Spider-Man: Friend or Foe — private research prototype
 
-This package is unfinished. It starts a scripted Tokyo research scenario. It is
-not a verified campaign co-op release. Two-account remote game delivery, real
-keyboard/controller usability, menus, reconnect, and campaign/save progression
-have not been established. Local checks do not certify remote play.
+This package is unfinished and is not a release.
+
+How to play: the host clicks the big red "Play Game" button and plays
+alone (New Game or Continue; saves are kept in the package's profile folder).
+To invite a friend, press Alt+Tab, click Host and send the lobby code. The friend
+enters the code and clicks Join: their game opens, starts by itself, takes over
+the host's campaign progress and appears in the Helicarrier hub. From there the
+host walks to the mission computer and both play the missions together, each
+with their own keyboard or controller. In co-op the mouse is not used in game.
+
+In the Helicarrier hub the friend also has a character: the campaign's chosen
+sidekick (Prowler at the start) appears next to Spider-Man and walks with the
+friend's controls; the camera keeps both characters in view. To change the
+sidekick, the host walks to the sidekick computer and presses Select; the friend
+then picks the character on that screen (only unlocked ones), and player 2 changes
+right away. The host uses the mission computer as before.
+
+If one player skips a movie or cutscene and the other watches it, the game that
+is ahead pauses at the next menu or the hub until the other one catches up.
+While it waits, a small box says "Waiting for your partner..." in the launcher's
+language; it closes by itself when the game continues.
+
+Starting a new campaign together: both players tick "Start a new campaign
+together" (with no game open), then Host / Join as usual. Both games start once
+the friend is connected. Skip the logo videos; the host picks New Game and
+confirms the save slot (each PC uses its own first empty slot automatically), and
+both of you watch the opening and play on together. The host keeps this campaign
+in the package's profile folder and can later Continue it alone and invite the
+friend with Host as above. In this mode only the host's menu choices count;
+choices the co-op route cannot follow (anything but New Game) do nothing.
+
+Tested only with bots on one PC: the host playing alone and a friend joining in
+the hub, then a mission together; New Game, hub, the first Tokyo mission and the
+return to the hub. Not established: two PCs over Steam, a host with real
+campaign progress (only fresh progress was transferred in tests), later
+missions, bosses, mission completion being recorded, real controllers and
+reconnecting.
 
 ## Setup on each PC
 
 1. Extract the complete package into a new writable local folder. Keep its
    launcher/, probe/, steam/native/, and compatibility/ subfolders together.
-2. Open Start.cmd. Windows x64 and the existing .NET Framework are required;
+2. Open Start.cmd. Pick the window's language at the top ("Launcher language":
+   English, Russian, Turkish, Ukrainian, German, French, Spanish, Portuguese,
+   Italian, Polish or Chinese); it starts in your Windows language and is
+   remembered. The game's own language (English or Russian files) is chosen
+   separately under "Game language". Windows x64 and the existing .NET Framework are required;
    Python is not needed to run this package.
 3. Choose English or Russian independently. Use Import installed folder to
-   select your own supported game copy. Import reads the source and creates a
-   separate verified test copy; it never replaces an existing copy. Each PC
-   needs enough free space for its own game copy. Use Verify copy thereafter.
-4. Select your own existing x64 steam_api64.dll. The currently supported build
-   has SHA-256 STEAM_SHA_VALUE. This package does not contain that DLL, Steam,
-   game executables, game assets, or personal saves, and does not download them.
-   A different SDK DLL is currently rejected; locating the supported build on
-   another PC remains a setup limitation.
-5. For an explicitly authorized account session, run Steam signed in, then use
+   select your own supported game copy. Import checks the game and links its
+   files into this package (no second copy on disk) when the package is on the
+   same drive as the game; on another drive it copies them (about 3.2 GB).
+   Your installed game is never changed: the add-on refuses any write to a
+   linked game file. Use Verify copy thereafter.
+4. The window finds the Steam component (steam_api64.dll) by itself in your
+   installed Steam games and shows "Steam component found (from <game>)".
+   It only reads files; nothing is copied or changed. It accepts copies signed
+   by Valve that contain everything Spacewar networking needs (recent games
+   such as Counter-Strike 2, Dota 2 or many Unity games have one). If none is
+   found, install any recent free Steam game, or use "Choose manually...".
+   This package does not contain that DLL, Steam, game executables, game
+   assets, or personal saves, and does not download them.
+5. Display: choose "Borderless window (Alt+Tab friendly)" or "Window" and a
+   resolution; your monitor's own size is preselected and the choice is
+   remembered. Each player picks their own; widescreen and ultrawide shapes
+   are shown correctly (more view to the sides, nothing stretched). In
+   borderless mode Alt+Tab never pauses the game, so your partner keeps playing.
+   "Game's own settings (original fullscreen)" uses the resolution saved in
+   the game's own options on this PC and its original fullscreen; Alt+Tab then
+   behaves like the original game (it may flicker or pause your partner).
+   The big red "Play Game" button starts the game right away, alone,
+   without Steam or a friend; the host's progress is kept in the profile folder.
+   The launcher also remembers the game folder you imported from.
+6. For an explicitly authorized account session, run Steam signed in, then use
    Host or Join. Host shows a numeric lobby code to exchange manually. Join
    enters that code. Clicking these controls starts Spacewar transport on that
    account. Opening the UI, verification, and import do not use the account.

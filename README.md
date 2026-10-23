@@ -4,7 +4,18 @@
 
 Two friends, two Windows game instances, and an independent English or Russian language choice on each PC. This project connects the game's native two-player controls through a synchronized input stream.
 
-**Research preview · active development · source only.** This is not a playable public release. No release binaries, game files or Steam libraries are distributed here. The current harness starts a controlled Tokyo scenario; a complete campaign session is still a goal.
+**Research preview · active development · source only.** This is not a playable public release. No release binaries, game files or Steam libraries are distributed here. The launcher's play mode uses the native campaign route; the bounded Tokyo scenario remains for automated connection checks.
+
+## Current state (2026-10-23)
+
+The campaign route now runs end to end in automated tests: New Game (or Continue) on the host, the Helicarrier hub, the mission computer, the first Tokyo mission and the return to the hub, twice in a row.
+
+- **Join at the hub:** the host plays alone and clicks Host whenever they like; the friend clicks Join, their game catches up with the host's progress by itself and appears in the Helicarrier.
+- **Player 2 in the hub:** the friend plays the campaign's chosen sidekick (Prowler at the start) next to Spider-Man; the friend can pick another unlocked sidekick at the sidekick computer.
+- **Cutscenes:** each player may skip or watch; the one ahead pauses with a "Waiting for your partner..." box in the launcher's language until the other catches up.
+- **Launcher:** red/blue themed UI in 11 languages, a big Play Game button, plain Steam error messages, and import that links the game files instead of copying them (no second 3 GB copy on the same drive).
+
+All of this was checked with bots on one PC with a mock Steam relay. Two PCs over real Steam, real controllers, later missions and save/continue across sessions remain untested; closed testing with real players is starting.
 
 ## What has been demonstrated
 
