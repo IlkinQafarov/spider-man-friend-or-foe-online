@@ -373,6 +373,26 @@ static HKL inputActualLayout=0,inputCanonicalLayout=0;
     networkFailed=true;log("NET FAIL input startup rejected reason=%s; no key substituted; owned game exits86",reason);
     ExitProcess(86);
 }
+// Players without the US layout loaded (tester 2026-10-23: only Russian/other layouts) used to be refused at startup.
+// The key-name initializer then gets this marker instead of a real layout, and its two translation calls
+// (52671F MapVirtualKeyExW, 52673A ToUnicodeEx) are answered from a table generated from the Windows US layout
+// (qa/make_us_keyboard_table.py). No keyboard layout is loaded, activated or changed on the player's PC.
+struct UsKey{WORD scan;BYTE vk;wchar_t ch;};
+static const UsKey usKeyboardTable[]={
+#include "us_keyboard_table.inc"
+};
+static const HKL builtinUsLayout=(HKL)(ULONG_PTR)0xF00D0409u;
+static const UsKey* usKey(UINT scan){for(const auto& k:usKeyboardTable)if(k.scan==scan)return &k;return 0;}
+static UINT WINAPI keyNameMapVirtualKey(UINT code,UINT type,HKL layout){
+    if(layout!=builtinUsLayout)return MapVirtualKeyExW(code,type,layout);
+    if(type!=3)return 0;const UsKey* k=usKey(code);return k?k->vk:0;
+}
+static int WINAPI keyNameToUnicode(UINT vk,UINT scan,const BYTE* state,LPWSTR out,int size,UINT flags,HKL layout){
+    if(layout!=builtinUsLayout)return ToUnicodeEx(vk,scan,state,out,size,flags,layout);
+    // The initializer always asks with an all-zero key state, as the table was generated.
+    for(const auto& k:usKeyboardTable)if(k.vk==vk&&(UINT)(k.scan&0xffu)==(scan&0xffu)&&k.ch){if(size<1||!out)return 0;out[0]=k.ch;if(size>1)out[1]=0;return 1;}
+    return 0;
+}
 static HKL WINAPI canonicalKeyboardLayout(DWORD thread){
     // Only52653C is patched. Its saved HKL is consumed by the initializer's
     // MapVirtualKeyEx/ToUnicodeEx internal-name generation; native DirectInput
@@ -383,19 +403,26 @@ static HKL WINAPI canonicalKeyboardLayout(DWORD thread){
     if(count<=0||count>256)startupInputFailure("cannot enumerate already loaded keyboard layouts");
     std::uint32_t handles[256]={};for(int i=0;i<count;i++)handles[i]=(std::uint32_t)(ULONG_PTR)loaded[i];
     std::uint32_t selected=0;
-    if(!coop::SelectLoadedUSLayout(handles,(std::size_t)count,selected)){
-        log("INPUT KEY_LAYOUT actual=%p canonical=unavailable loaded_count=%d; no layout activated or installed",inputActualLayout,count);
-        startupInputFailure("standard US keyboard layout is not already loaded");
+    HKL canonical=builtinUsLayout;
+    // Tests force the table on a PC that has the US layout (COOP_PROBE_BUILTIN_US_KEYS=1).
+    wchar_t force[4]={};bool forceBuiltin=GetEnvironmentVariableW(L"COOP_PROBE_BUILTIN_US_KEYS",force,4)==1&&force[0]==L'1';
+    if(!forceBuiltin&&coop::SelectLoadedUSLayout(handles,(std::size_t)count,selected)){
+        canonical=(HKL)(ULONG_PTR)selected;
+        // Wherever the real US layout exists, check the built-in table against it.
+        unsigned mismatches=0;const BYTE zero[256]={};
+        for(const auto& k:usKeyboardTable){UINT vk=MapVirtualKeyExW(k.scan,3,canonical);wchar_t out[4]={};int got=vk?ToUnicodeEx(vk,k.scan&0xffu,zero,out,4,0,canonical):0;
+            if(vk!=k.vk||(got==1?out[0]:0)!=k.ch){if(mismatches++<8)log("INPUT US_TABLE_MISMATCH scan=%04x table_vk=%02x real_vk=%02x table_ch=%04x real_ch=%04x",k.scan,k.vk,vk,k.ch,got==1?out[0]:0);}}
+        log("INPUT US_TABLE_CHECK rows=%u mismatches=%u",(unsigned)(sizeof(usKeyboardTable)/sizeof(usKeyboardTable[0])),mismatches);
     }
-    HKL canonical=(HKL)(ULONG_PTR)selected;
+    else log("INPUT KEY_LAYOUT %s (count=%d); using the built-in US key table; no layout activated or installed",forceBuiltin?"built-in table forced by test":"no US layout loaded",count);
     struct Translation{UINT scan;wchar_t expected;};
     const Translation translations[]={{0x11,L'w'},{0x1e,L'a'},{0x1f,L's'},{0x20,L'd'},
         {0x15,L'y'},{0x2c,L'z'},{2,L'1'},{0x0c,L'-'},{0x27,L';'},{0x28,L'\''},
         {0x29,L'`'},{0x2b,L'\\'},{0x1a,L'['},{0x1b,L']'},{0x33,L','},{0x34,L'.'},{0x35,L'/'}};
     const BYTE state[256]={};
     for(const auto& test:translations){
-        UINT vk=MapVirtualKeyExW(test.scan,3,canonical);wchar_t output[4]={};
-        if(!vk||ToUnicodeEx(vk,test.scan,state,output,4,0,canonical)!=1||output[0]!=test.expected)
+        UINT vk=keyNameMapVirtualKey(test.scan,3,canonical);wchar_t output[4]={};
+        if(!vk||keyNameToUnicode(vk,test.scan,state,output,4,0,canonical)!=1||output[0]!=test.expected)
             startupInputFailure("already loaded US handle failed canonical physical-key validation");
     }
     inputCanonicalLayout=canonical;
@@ -1845,7 +1872,18 @@ static bool patchVerifiedCall(DWORD address,DWORD expected,void* replacement){
     BYTE* at=(BYTE*)address;if(at[0]!=0xe8||(DWORD)(address+5+*(LONG*)(at+1))!=expected){log("FAIL AUTOTEST call signature address=%08lx",address);return false;}
     DWORD old=0;if(!VirtualProtect(at,5,PAGE_EXECUTE_READWRITE,&old))return false;*(DWORD*)(at+1)=(DWORD)(ULONG_PTR)replacement-(address+5);FlushInstructionCache(GetCurrentProcess(),at,5);DWORD ignored=0;bool ok=VirtualProtect(at,5,old,&ignored)!=0;log("AUTOTEST verified call patched address=%08lx original=%08lx",address,expected);return ok;
 }
+static bool patchIndirectUser32Call(DWORD address,DWORD iat,const char* name,void* replacement){
+    BYTE prior[6]={};DWORD import=0;FARPROC expected=GetProcAddress(GetModuleHandleW(L"user32.dll"),name);
+    if(!expected||!readMemory((void*)address,prior,6)||prior[0]!=0xff||prior[1]!=0x15||memcmp(prior+2,&iat,4)||!readMemory((void*)iat,&import,4)||import!=(DWORD)(ULONG_PTR)expected){
+        log("FAIL key-name call/IAT signature address=%08lx name=%s",address,name);return false;}
+    BYTE patch[6]={0xe8,0,0,0,0,0x90};DWORD delta=(DWORD)(ULONG_PTR)replacement-(address+5);memcpy(patch+1,&delta,4);
+    DWORD old=0;if(!VirtualProtect((void*)address,6,PAGE_EXECUTE_READWRITE,&old))return false;
+    memcpy((void*)address,patch,6);bool flushed=FlushInstructionCache(GetCurrentProcess(),(void*)address,6)!=0;DWORD ignored=0;bool restored=VirtualProtect((void*)address,6,old,&ignored)!=0;
+    log("INPUT verified key-name call patched address=%08lx name=%s protection_restored=%u",address,name,restored?1u:0u);return flushed&&restored;
+}
 static bool patchKeyboardLayoutCall(){
+    if(!patchIndirectUser32Call(0x52671f,0x5562a4,"MapVirtualKeyExW",(void*)keyNameMapVirtualKey)||
+       !patchIndirectUser32Call(0x52673a,0x556234,"ToUnicodeEx",(void*)keyNameToUnicode))return false;
     // Exact-build FF15 [GetKeyboardLayout IAT] at52653C; E8+nop keeps all6
     // bytes and its stdcall argument/return contract. No process-wide IAT edit.
     const DWORD address=0x52653c,iat=0x5562a8;BYTE prior[6]={};DWORD import=0;

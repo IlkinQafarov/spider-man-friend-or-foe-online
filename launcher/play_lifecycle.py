@@ -99,6 +99,9 @@ def environment(source, seat, diagnostics=True, campaign=False, deferred=False, 
         if os.environ.get("FOF_RESEARCH_SIDEKICK_TEST") == "1":
             values["HUB_SIDEKICK_TEST"] = "1"
         # The launcher passes its translated partner-wait notice; tests may pass one to check a language renders.
+        # Test the built-in US key table on a PC that has the US layout.
+        if os.environ.get("FOF_RESEARCH_BUILTIN_US_KEYS") == "1":
+            values["BUILTIN_US_KEYS"] = "1"
         if os.environ.get("FOF_RESEARCH_WAIT_TEXT"):
             values["WAIT_TEXT"] = os.environ["FOF_RESEARCH_WAIT_TEXT"]
     env.update({"COOP_PROBE_" + key: value for key, value in values.items()})

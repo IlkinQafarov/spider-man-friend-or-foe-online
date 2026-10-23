@@ -31,7 +31,7 @@ PAYLOAD = {
     "steam/native/steam_appid.txt": None,
     "compatibility/baseline.json": None,
 }
-START = b'@echo off\r\nsetlocal\r\nstart "" "%~dp0launcher\\fof-private-launcher.exe"\r\n'
+START = ('@echo off\r\nsetlocal\r\nrem Opened straight from inside the .zip, Windows copies only this file to a temporary folder:\r\nrem say so plainly instead of Windows\' "cannot find fof-private-launcher.exe".\r\nif exist "%~dp0launcher\\fof-private-launcher.exe" goto run\r\nchcp 65001 >nul\r\necho.\r\necho   The package is still inside the .zip file.\r\necho   Right-click the .zip, choose "Extract All...", then open Start.cmd in the extracted folder.\r\necho.\r\necho   Файлы всё ещё внутри .zip-архива.\r\necho   Нажмите на .zip правой кнопкой мыши, выберите «Извлечь все...»,\r\necho   затем откройте Start.cmd в распакованной папке.\r\necho.\r\npause\r\nexit /b 1\r\n:run\r\nstart "" "%~dp0launcher\\fof-private-launcher.exe"\r\n').encode('utf-8')
 README = """# Spider-Man: Friend or Foe — private research prototype
 
 This package is unfinished and is not a release.
