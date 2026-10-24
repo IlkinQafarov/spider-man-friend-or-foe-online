@@ -6,16 +6,17 @@ Two friends, two Windows game instances, and an independent English or Russian l
 
 **Alpha · active development.** Test builds are on the [Releases](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases) page (marked alpha; expect bugs). No game files or Steam libraries are distributed here: you need your own copy of the game. The launcher's play mode uses the native campaign route; the bounded Tokyo scenario remains for automated connection checks.
 
-## Current state (2026-10-23)
+## Current state (2026-10-24, v0.1.6-alpha-player)
 
-The campaign route now runs end to end in automated tests: New Game (or Continue) on the host, the Helicarrier hub, the mission computer, the first Tokyo mission and the return to the hub, twice in a row.
+The campaign route runs end to end in automated tests: New Game or Continue on the host, the Helicarrier hub, the mission computer, the first Tokyo mission and the return to the hub.
 
-- **Join at the hub:** the host plays alone and clicks Host whenever they like; the friend clicks Join, their game catches up with the host's progress by itself and appears in the Helicarrier.
-- **Player 2 in the hub:** the friend plays the campaign's chosen sidekick (Prowler at the start) next to Spider-Man; the friend can pick another unlocked sidekick at the sidekick computer.
-- **Cutscenes:** each player may skip or watch; the one ahead pauses with a "Waiting for your partner..." box in the launcher's language until the other catches up.
-- **Launcher:** red/blue themed UI in 11 languages, a big Play Game button, plain Steam error messages, and import that links the game files instead of copying them (no second 3 GB copy on the same drive).
+- **Launcher:** two big buttons, HOST and JOIN, in 11 languages. HOST opens the host's game and the lobby; the friend pastes the code and clicks JOIN, and their game opens and connects by itself. Import ("Locate game install") links the game files instead of copying them.
+- **Two ways in, chosen automatically:** if the friend joins while the host is still in the main menu, both start together and watch the opening (the host picks New Game). If the host picks Continue or is already playing, the friend's game catches up and appears next to the host in the Helicarrier. A friend who leaves can rejoin there.
+- **Player 2:** the friend plays the campaign's chosen sidekick and can pick another unlocked one at the sidekick computer. In a mission, either player holds TAB for half a second to swap characters.
+- **Cutscenes:** each player may skip or watch; the one ahead waits with a "Waiting for your partner…" box until the other catches up.
+- **Settings:** Audio Settings are also in the main menu's Options; keyboard players start with the game's Laptop controls layout; the game's settings are kept between launches. The game runs at 60 frames per second, alone and in co-op.
 
-All of this was checked with bots on one PC with a mock Steam relay. Two PCs over real Steam, real controllers, later missions and save/continue across sessions remain untested; closed testing with real players is starting.
+All of this was checked with bots on one PC with a mock Steam relay. Two PCs over real Steam, real controllers, later missions and shared saves remain untested; testing with real players is starting.
 
 ## What has been demonstrated
 
