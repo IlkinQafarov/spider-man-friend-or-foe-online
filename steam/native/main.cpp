@@ -1,3 +1,5 @@
+#include <windows.h>
+#include <timeapi.h>
 #include "relay.hpp"
 #include <cerrno>
 #include <cstdio>
@@ -51,6 +53,8 @@ void help() {
 }
 }
 int wmain(int argc,wchar_t** argv) {
+    // 1 ms timer: the relay loop's Sleep(2) otherwise lasts a 15.6 ms tick, adding up to ~60 ms per round trip.
+    timeBeginPeriod(1);
     try {
         if(argc==2 && std::wstring(argv[1])==L"--abi-selftest") return fof::abiSelftest();
         if(argc==2 && std::wstring(argv[1])==L"--protocol-selftest") return fof::protocolSelftest();

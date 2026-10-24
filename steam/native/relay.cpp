@@ -42,6 +42,9 @@ Winsock::Winsock() {
 void nonblocking(SOCKET socket) {
     u_long value=1;
     if(ioctlsocket(socket,FIONBIO,&value)) throw Failure("Could not make loopback socket nonblocking");
+    // Small game messages go out at once: with Nagle on this side, a reply waited for the game's delayed ACK
+    // (up to ~200 ms per exchange; first two-PC test, 2026-10-24: hub frames ~285 ms apart).
+    BOOL noDelay=TRUE; setsockopt(socket,IPPROTO_TCP,TCP_NODELAY,reinterpret_cast<const char*>(&noDelay),sizeof(noDelay));
 }
 Socket listenLoopback(unsigned short port) {
     Socket socket(::socket(AF_INET,SOCK_STREAM,IPPROTO_TCP));

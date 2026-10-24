@@ -72,6 +72,8 @@ Audio settings: the main menu's Options now has Audio Settings too (the same
 screen as in the hub). Its first entry, saving the game, only works once a game
 is loaded. The game runs at 60 frames per second, alone and in co-op.
 
+First launch: music starts at 50%, speech and effects at 80%.
+
 Controls and settings: keyboard players (no controller plugged in) start with the
 game's Laptop controls layout. You can change it in Options; the game's own
 settings (controls layout, volumes, brightness) are kept in the package's profile
@@ -83,12 +85,17 @@ While it waits, a small box says "Waiting for your partner..." in the launcher's
 language; it closes by itself when the game continues.
 
 Watching the opening together happens by itself: if the friend clicks JOIN while
-the host is still in the main menu (before starting a game), the host's game
-waits a moment for the friend's game to reach its main menu too. Then the host
-picks New Game and both of you watch the opening and play on together (each PC
-uses its own first empty save slot). If the host picks Continue instead, the
+the host is still in the main menu (before starting a game), both games stay in
+their own main menus (each player can change Options, Audio and so on). When the
+host picks New Game, the host's game waits a moment until the friend's game is
+back in its main menu, then you both watch the opening and play on together (each
+PC uses its own first empty save slot). If the host picks Continue instead, the
 friend joins in the Helicarrier as usual. If the host is already playing when the
 friend joins, the friend joins in the Helicarrier.
+
+In the Helicarrier during co-op, Escape does nothing (its pause menu only offers
+dropping player 2 or quitting, which would break the session). To stop, click
+"Stop session" in the launcher or close the game. Pause in missions works for both.
 
 Tested only with bots on one PC: the host playing alone and a friend joining in
 the hub, then a mission together; New Game, hub, the first Tokyo mission and the

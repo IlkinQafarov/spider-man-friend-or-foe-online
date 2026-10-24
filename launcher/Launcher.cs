@@ -680,11 +680,11 @@ sealed class LauncherForm : Form {
         // "Start together": both games start once the partner connects and the host's menu choices drive both,
         // from the main menu on, so both players see the opening. Otherwise the friend joins the host at the hub.
         if(!automated.Checked&&!together.Checked){
-            // Host links the game already being played (or opens one). A joiner always gets a fresh catch-up game,
-            // kept in the display mode it chose with the display button.
-            bool display=false;
-            if(!hosting&&launcher!=null){display=true;await StopSession();if(gameMonitor!=null)await gameMonitor;}
-            if(launcher==null&&!await LaunchGame(hosting,display))return;
+            // Host links the game already being played (or opens one). A joiner always gets a fresh catch-up game.
+            // Both open with the display mode picked in the launcher (first two-PC test, 2026-10-24: without a
+            // Play Game button, HOST and JOIN fell back to the game's own fullscreen).
+            if(!hosting&&launcher!=null){await StopSession();if(gameMonitor!=null)await gameMonitor;}
+            if(launcher==null&&!await LaunchGame(hosting,true))return;
             await LinkSession(hosting);return;
         }
         if(launcher!=null){Note(automated.Checked?"Close the open game before running the automated connection test.":UiText.Get("togetherClose"));return;}bool runTest=automated.Checked&&!PlayerEdition;ControlsBusy(true);peerReady=false;gameStarted=false;cancelRequested=false;cleanupForced=false;connectionPassed=false;session=null;

@@ -458,7 +458,9 @@ def run(args):
                 raise Failed("One-sided stop requires explicit host stop and peer normal-close evidence")
             summary["one_sided_stop_confirmed"] = True
         if args.quiet:
-            if any(list(box.glob("game-frame-*.bmp")) for box in boxes):
+            # game-frame-40000N.bmp: the black-screen recorder's picture after a window activation (up to five per
+            # session, by design also in normal play); a focus change on the desktop is not a quiet-mode violation.
+            if any(p for box in boxes for p in box.glob("game-frame-*.bmp") if not p.name.startswith("game-frame-40000")):
                 raise Failed("Quiet play unexpectedly captured diagnostic game images")
             summary["quiet_no_capture"] = True
         # Shutdown failures remain failures too; no filtering of peer-close errors.
