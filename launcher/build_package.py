@@ -115,12 +115,13 @@ reconnecting.
    remembered. The game's own language (English or Russian files) is chosen
    separately under "Game language". Windows x64 and the existing .NET Framework are required;
    Python is not needed to run this package.
-3. Choose English or Russian independently. Use "Locate game install" to
-   select your own supported game copy. It checks the game and links its
-   files into this package (no second copy on disk) when the package is on the
-   same drive as the game; on another drive it copies them (about 3.2 GB).
-   Your installed game is never changed: the add-on refuses any write to a
-   linked game file. Use Verify copy thereafter.
+3. The launcher looks for your installed game on all drives when it starts and
+   offers the copy it finds (only read, never changed). Otherwise click
+   "Locate game install" and select the folder that contains Game.exe. The game
+   can be on any drive: on the launcher's drive its files are linked (no second
+   copy); on another drive the large art folder is linked as a folder and about
+   30 MB is copied. Your installed game is never changed: the add-on refuses any
+   write to it. Choose English or Russian independently. Use Verify copy thereafter.
 4. The window finds the Steam component (steam_api64.dll) by itself in your
    installed Steam games and shows "Steam component found (from <game>)".
    It only reads files; nothing is copied or changed. It accepts copies signed
