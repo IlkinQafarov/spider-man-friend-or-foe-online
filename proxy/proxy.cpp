@@ -43,8 +43,14 @@ static void logline(const char* fmt, ...) {
     if (!n || n >= 32768) return;
     wchar_t path[32768];
     _snwprintf(path, 32768, L"%s\\proxy.log", root);
-    HANDLE h = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ, 0,
-                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+    // A scanner (antivirus) may hold the new file for a moment: retry for up to ~2 s instead of losing the line the
+    // launcher waits for (tester session 20261024T142800896: no "entry reached" line, game closed after 30 s).
+    HANDLE h = INVALID_HANDLE_VALUE;
+    for (int attempt = 0; attempt < 100 && h == INVALID_HANDLE_VALUE; attempt++) {
+        h = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, 0,
+                        OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+        if (h == INVALID_HANDLE_VALUE) Sleep(20);
+    }
     if (h == INVALID_HANDLE_VALUE) return;
     char buf[1024];
     va_list ap; va_start(ap, fmt);

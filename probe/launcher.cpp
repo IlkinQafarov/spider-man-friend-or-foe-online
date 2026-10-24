@@ -16,6 +16,12 @@ static bool within(const wchar_t* p,const wchar_t* root){size_t n=wcslen(root);r
 static bool noReparse(const wchar_t* path){wchar_t b[32768];lstrcpyW(b,path);for(wchar_t* p=b+3;*p;p++)if(*p=='\\'){*p=0;DWORD a=GetFileAttributesW(b);*p='\\';if(a!=INVALID_FILE_ATTRIBUTES&&(a&FILE_ATTRIBUTE_REPARSE_POINT))return false;}DWORD a=GetFileAttributesW(b);return a==INVALID_FILE_ATTRIBUTES||!(a&FILE_ATTRIBUTE_REPARSE_POINT);}
 // 0 = proxy has not reached the game's entry yet, 1 = probe loaded, 2 = probe failed to load.
 static int proxyState(const wchar_t* path){HANDLE file=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,0,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,0);if(file==INVALID_HANDLE_VALUE)return 0;char text[4096]={};DWORD read=0;BOOL ok=ReadFile(file,text,sizeof(text)-1,&read,0);CloseHandle(file);if(!ok)return 0;const char* entry=strstr(text,"entry reached");if(!entry)return 0;const char* handle=strstr(entry,"handle=");return handle&&strncmp(handle,"handle=00000000",15)&&strncmp(handle,"handle=0000000000000000",23)?1:2;}
+// The probe's own log also proves it loaded (its READY line is written only after all pre-entry hooks are installed);
+// used when the proxy's line is missing, e.g. a scanner held proxy.log (tester session 20261024T142800896).
+static bool probeReady(const wchar_t* sandbox){wchar_t path[32768];_snwprintf(path,32768,L"%s\\probe.log",sandbox);
+    HANDLE file=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,0,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,0);if(file==INVALID_HANDLE_VALUE)return false;
+    static char text[65536];DWORD read=0;BOOL ok=ReadFile(file,text,sizeof(text)-1,&read,0);CloseHandle(file);if(!ok)return false;text[read]=0;
+    for(DWORD i=0;i<read;i++)if(!text[i])text[i]=' ';return strstr(text,"READY pre-entry hooks installed")!=0;}
 // Every build of proxy/proxy.cpp reads this variable name, so its UTF-16 text identifies an older build of the add-on's own proxy.
 static bool ownProxyBuild(const wchar_t* path){
     HANDLE f=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ,0,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,0);if(f==INVALID_HANDLE_VALUE)return false;
@@ -60,7 +66,7 @@ int wmain(int argc,wchar_t** argv){bool self=argc>=2&&!wcscmp(argv[1],L"--selfte
     bool ok=false;DWORD stage=1;HANDLE injected=0;
     do{stage=3;static wchar_t proxyLog[32768];_snwprintf(proxyLog,32768,L"%s\\proxy.log",sandbox);bool ready=false;ULONGLONG deadline=GetTickCount64()+30000;
         // The proxy logs when the game reaches its entry point and whether the probe loaded. A game that could not load the probe is stopped (fail closed).
-        while(GetTickCount64()<deadline){if(WaitForSingleObject(pi.hProcess,0)==WAIT_OBJECT_0)break;int state=proxyState(proxyLog);if(state==2)break;if(state==1){ready=true;break;}Sleep(20);}if(!ready)break;
+        while(GetTickCount64()<deadline){if(WaitForSingleObject(pi.hProcess,0)==WAIT_OBJECT_0)break;int state=proxyState(proxyLog);if(state==2)break;if(state==1||probeReady(sandbox)){ready=true;break;}Sleep(20);}if(!ready)break;
         printf("HOOK_READY pid=%lu sha256=%s selftest=%u timeout=%lus play=%u\n",pi.dwProcessId,digest,self?1:0,play?0u:seconds,play?1:0);fflush(stdout);
         wchar_t marker[32768];_snwprintf(marker,32768,L"%s\\probe-finished.signal",sandbox);bool scriptFinished=false;DWORD result=WAIT_TIMEOUT;ULONGLONG endTime=GetTickCount64()+seconds*1000;
         while(play||GetTickCount64()<endTime){result=WaitForSingleObject(pi.hProcess,250);if(result!=WAIT_TIMEOUT)break;DWORD attrs=GetFileAttributesW(marker);if(!self&&attrs!=INVALID_FILE_ATTRIBUTES&&!(attrs&(FILE_ATTRIBUTE_DIRECTORY|FILE_ATTRIBUTE_REPARSE_POINT))){scriptFinished=true;break;}}
