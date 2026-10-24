@@ -175,8 +175,13 @@ void validationTests() {
         mustFail([&]{relay.step();},"Oversized lobby accepted");
     }
     {
-        Hub hub; hub.members={101,101}; Memory api(hub,0); Relay relay(api,true,0); relay.start();
-        mustFail([&]{relay.step();},"Duplicate lobby identity accepted");
+        // Transient nil/repeated members (seen on real Steam) are skipped: the real peer is still found.
+        Hub hub; hub.members={101,0,101,202}; Memory api(hub,0); Relay relay(api,true,0); relay.start(); relay.step();
+        check(relay.peer==202 && relay.memberGaps_==2,"Transient lobby member gaps not skipped");
+    }
+    {
+        Hub hub; hub.members={101,101}; Memory api(hub,0); Relay relay(api,true,0); relay.start(); relay.step();
+        check(relay.peer==0,"Repeated own identity produced a peer");
     }
     {
         Hub hub; Memory api(hub,0); Relay relay(api,true,0); relay.start(); relay.step();

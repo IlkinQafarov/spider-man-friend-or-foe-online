@@ -64,11 +64,18 @@ static bool resetError() {
     return error==WSAECONNRESET || error==WSAECONNABORTED || error==WSAESHUTDOWN || error==WSAENOTCONN;
 }
 std::vector<Id> Relay::checkedMembers() {
-    auto list=api_.members(lobby);
-    if(list.size()>2) throw Failure("Expected a two-player lobby");
-    for(std::size_t i=0;i<list.size();++i) {
-        if(!list[i] || (i && list[i]==list[0])) throw Failure("Invalid lobby member identity");
+    // Steam can briefly report an empty (nil) or repeated member while someone joins, leaves or its client
+    // reconnects (first two-PC test, 2026-10-24: "Invalid lobby member identity" right after PEER_READY ended both
+    // sessions). Such entries are skipped; a player who really left is caught by the peer checks.
+    std::vector<Id> list;
+    for(Id member:api_.members(lobby)) {
+        if(!member || std::find(list.begin(),list.end(),member)!=list.end()) {
+            if(memberGaps_++<16) log("LOBBY_MEMBER_GAP_SKIPPED","\"member\":"+std::to_string(member));
+            continue;
+        }
+        list.push_back(member);
     }
+    if(list.size()>2) throw Failure("Expected a two-player lobby");
     return list;
 }
 void Relay::queue(Bytes message) {

@@ -108,6 +108,7 @@ class Relay {
     void localIo(std::uint64_t now);
 public:
     Id lobby=0, peer=0, tx=0, rx=0, discarded=0, rejected=0;
+    unsigned memberGaps_=0;
     Relay(Backend& api, bool host, unsigned short port, std::wstring readyFile={}):
         api_(api),host_(host),port_(port),readyFile_(std::move(readyFile)) {}
     ~Relay() { close(); }

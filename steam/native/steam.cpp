@@ -24,6 +24,14 @@ static_assert(sizeof(Identity)==136 && sizeof(Callback)==24 && sizeof(Completed)
 static_assert(sizeof(Created)==16 && sizeof(Entered)==24 && offsetof(Entered,response)==16);
 static_assert(sizeof(Chat)==32 && offsetof(MessagePrefix,sender)==16);
 
+// Steam's manual dispatch hands over every callback for the pipe, including ones this relay never reads.
+// First two-PC test (2026-10-24): the joiner ended with "Steam callback size rejected" right after PEER_READY.
+// Callbacks are now only rejected when the relay would actually read them; odd ones are skipped and logged.
+bool usableCallback(const Callback& callback) {
+    if(callback.size<0 || (callback.size && !callback.param)) return false;
+    if(callback.callback==703) return callback.size>=static_cast<int>(sizeof(Completed));
+    return true;
+}
 std::string hashHandle(HANDLE file) {
     if(file==INVALID_HANDLE_VALUE) throw Failure("Could not open pinned DLL read-only");
     BCRYPT_ALG_HANDLE algorithm=nullptr; BCRYPT_HASH_HANDLE hash=nullptr;
@@ -79,6 +87,7 @@ class Steam final:public Backend {
     void* user_=nullptr; void* matchmaking_=nullptr; void* network_=nullptr;
     Id ownedLobby_=0,requestedLobby_=0;
     std::map<Id,std::pair<int,unsigned>> pending_;
+    unsigned skipped_=0;
 #define FLAT(name,result,...) using name##Type=result(__cdecl*)(__VA_ARGS__); name##Type name=nullptr
     FLAT(InitFlat,int,char*); FLAT(Init,bool); FLAT(Shutdown,void); FLAT(GetHSteamPipe,int);
     FLAT(ManualDispatch_Init,void); FLAT(ManualDispatch_RunFrame,void,int);
@@ -204,10 +213,12 @@ public:
         while(ManualDispatch_GetNextCallback(pipe_,&callback)) {
             struct Release { Steam& s; ~Release(){s.ManualDispatch_FreeLastCallback(s.pipe_);} } release{*this};
             if(++count>256) throw Failure("Steam callback batch limit");
-            if(callback.size<0 || callback.size>4096 || (callback.size && !callback.param)) throw Failure("Steam callback size rejected");
+            if(!usableCallback(callback)) {
+                if(skipped_++<16) log("STEAM_CALLBACK_SKIPPED","\"callback\":"+std::to_string(callback.callback)+",\"size\":"+std::to_string(callback.size));
+                continue;
+            }
             const auto* data=static_cast<const unsigned char*>(callback.param);
             if(callback.callback==703) {
-                if(callback.size<static_cast<int>(sizeof(Completed))) throw Failure("Invalid Steam call completion");
                 Completed done{}; std::memcpy(&done,data,sizeof(done));
                 const auto pending=pending_.find(done.call);
                 if(pending==pending_.end()) continue;
@@ -290,6 +301,8 @@ int abiSelftest() {
     const auto metric=exportFunction<int(__cdecl*)(int)>(concrete->module(),"FOF_MockMetric");
     std::array<int,5> before{}; for(int i=0;i<5;++i) before[static_cast<std::size_t>(i)]=metric(i);
     constexpr Id lobby=480000123456ULL;
+    int big=0; Callback odd[]={{1,1999999,&big,1<<20},{1,1222,nullptr,8},{1,7,nullptr,-1},{1,703,&big,4},{1,504,&big,4}};
+    require(!usableCallback(odd[1]) && !usableCallback(odd[2]) && !usableCallback(odd[3]) && usableCallback(odd[0]) && usableCallback(odd[4]),"Callback size rules");
     for(bool host:{true,false}) {
         api->start(host,host?0:lobby);
         const auto events=api->events(); require(events.size()==2,"Owned and duplicate lobby callbacks expected");
