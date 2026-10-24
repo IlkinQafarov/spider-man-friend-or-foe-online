@@ -84,18 +84,18 @@ The three area swaps are controlled fixtures. They are useful transition coverag
 
 ## Progress estimate
 
-The current estimate is **40 / 100 toward a first playable release**:
+The current estimate is **63 / 100 toward a first playable release** (2026-10-24, v0.1.6-alpha-player; was 40):
 
 | Workstream | Earned | Available |
 | --- | ---: | ---: |
 | Exact-build foundation and language compatibility | 10 | 10 |
-| Core input lockstep | 16 | 20 |
-| Transport | 6 | 15 |
-| Campaign and menus | 0 | 20 |
-| Save/resume | 0 | 10 |
-| Launcher and packaging | 5 | 10 |
-| End-to-end QA | 3 | 15 |
-| **Total** | **40** | **100** |
+| Core input lockstep (incl. pause, character swap) | 17 | 20 |
+| Transport (Steam relay; no real two-PC session yet) | 8 | 15 |
+| Campaign and menus (New Game/Continue, hub, first mission and return, join/rejoin, start together, sidekick choice) | 11 | 20 |
+| Save/resume (host saves and Continue; shared saves not done) | 3 | 10 |
+| Launcher and packaging (player releases, 11 languages, kept settings) | 9 | 10 |
+| End-to-end QA (bots on one PC only) | 5 | 15 |
+| **Total** | **63** | **100** |
 
 Weights and partial credit are engineering judgement, not empirical test coverage, elapsed effort or a time forecast. “10/10” in the foundation row applies only to the pinned target and known language packs. It does not imply compatibility with all editions. Scores should change when acceptance evidence changes, including regression findings.
 

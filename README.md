@@ -33,7 +33,22 @@ Earlier **run 033** failed on both clients during native startup, before gamepla
 
 ## How far along?
 
-**40 / 100 toward a first playable release**, based on a weighted engineering assessment. This is a judgement about milestones, not a measured coverage percentage or a delivery-date forecast. The missing campaign, save and remote-session work is substantial. The [score breakdown](docs/STATUS.md#progress-estimate) and [roadmap](docs/ROADMAP.md) explain what remains.
+**About 63 / 100 toward a first playable release** (updated 2026-10-24, v0.1.6-alpha-player). This is an engineering judgement about milestones, not a measured coverage percentage or a delivery date.
+
+What works in automated tests (bots, one PC, mock Steam relay):
+
+- The campaign route end to end: New Game or Continue, the Helicarrier, the mission computer, the first Tokyo mission and the return to the Helicarrier.
+- Starting together from the main menu (both watch the opening) or joining the host in the Helicarrier; a friend who leaves can rejoin.
+- Picking the friend's sidekick, swapping characters with TAB, native pause, cutscenes skipped at different times.
+- A player launcher in 11 languages with HOST / JOIN, published as alpha releases; game settings are kept between launches.
+
+What is still missing before a first playable release:
+
+- **A real session between two PCs over Steam** (the biggest open item).
+- Later missions and bosses, mission completion being recorded, and saving the shared campaign from both sides.
+- Real controllers, reconnecting in the middle of a mission, and testing by real players.
+
+The [score breakdown](docs/STATUS.md#progress-estimate) and [roadmap](docs/ROADMAP.md) explain what remains.
 
 ## Explore the source
 
