@@ -2037,5 +2037,13 @@ BOOL WINAPI DllMain(HINSTANCE h,DWORD why,LPVOID){if(why!=DLL_PROCESS_ATTACH)ret
     wchar_t normalized[32768];if(!fullpath(sandbox,normalized))return FALSE;lstrcpyW(sandbox,normalized);if(!fullpath(gameRoot,normalized))return FALSE;lstrcpyW(gameRoot,normalized);
     while(wcslen(sandbox)>3&&sandbox[wcslen(sandbox)-1]=='\\')sandbox[wcslen(sandbox)-1]=0;while(wcslen(gameRoot)>3&&gameRoot[wcslen(gameRoot)-1]=='\\')gameRoot[wcslen(gameRoot)-1]=0;
     mkdirs(sandbox);wchar_t path[32768];_snwprintf(path,32768,L"%s\\probe.log",sandbox);logHandle=CreateFileW(path,GENERIC_WRITE,FILE_SHARE_READ,0,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,0);if(logHandle==INVALID_HANDLE_VALUE)return FALSE;
+#ifdef FOF_PLAYER_BUILD
+    // Player edition (FOF_PLAYER_EDITION): only the retail campaign runs. Test bots, scripted scenarios and
+    // fault fixtures cannot be switched on; asking for one refuses the launch instead of running it.
+    if(autoTest||inputBot||playBot||actionBot||campaignFixture||humanInputFixture||humanDisconnectFixture||humanKeyboardFixture||
+       networkJitterFixture||networkMutateFixture||networkTransitionFixture||networkMissionEndFixture||networkPauseFixture||campaignSidekickTest||
+       (!campaignMode&&!selfTest))return FALSE;
+    log("FOF_PLAYER_EDITION bots and test fixtures disabled");
+#endif
     log("probe attach pid=%lu selftest=%u",GetCurrentProcessId(),selfTest?1:0);if(campaignMode)log("CAMPAIGN CONFIG enabled=1 fixture=%u research_autotest=0",campaignFixture?1u:0u);originalErrno=(decltype(originalErrno))GetProcAddress(GetModuleHandleW(L"MSVCR80.dll"),"_errno");if(!install()){log("FAIL installation; launcher must terminate");return FALSE;}if(!AddVectoredExceptionHandler(1,exception)){log("FAIL exception diagnostic registration");return FALSE;}log("READY pre-entry hooks installed; registry entirely virtual; raw input and timing preserved");return TRUE;
 }

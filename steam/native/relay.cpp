@@ -86,9 +86,20 @@ void Relay::lobbyReady(Id id) {
     if(!id) throw Failure("Invalid zero lobby ID");
     if(lobby==id) { log("DUPLICATE_LOBBY_CALLBACK_IGNORED"); return; }
     if(lobby) throw Failure("Unexpected second lobby");
-    if(!host_ && api_.tag(id)!=Tag) throw Failure("That lobby is not this Friend or Foe co-op prototype");
+    if(!host_) {
+        const std::string found=api_.tag(id), prefix=std::string(Tag)+";mode=";
+        if(found!=lobbyTag()) {
+            // A host with another mode, or another add-on version, is refused before any game data is exchanged.
+            if(!mode_.empty() && found.rfind(prefix,0)==0) {
+                std::string other; for(char c:found.substr(prefix.size())) if(c>='a' && c<='z' && other.size()<16) other+=c;
+                throw Failure("PLAY_MODE_MISMATCH host="+other);
+            }
+            if(found==Tag || found.rfind(prefix,0)==0) throw Failure("ADDON_VERSION_MISMATCH");
+            throw Failure("That lobby is not this Friend or Foe co-op prototype");
+        }
+    }
     lobby=id;
-    if(host_) api_.setTag(lobby,Tag);
+    if(host_) api_.setTag(lobby,lobbyTag().c_str());
     else listener_=listenLoopback(port_);
     log("LOBBY_READY","\"lobby\":"+std::to_string(lobby)+",\"host\":"+(host_?"true":"false")+",\"transport\":"+jsonString(api_.kind()));
     if(!readyFile_.empty()) {
@@ -137,7 +148,9 @@ void Relay::findPeer(std::uint64_t now) {
         peer=host_?member:api_.owner(lobby);
         if(peer!=member) throw Failure("Lobby owner is not the other player");
         peerSeen_=now;
-        log("PEER_READY","\"peer\":"+std::to_string(peer));
+        // The host announces its partner only once the partner's relay talks to it: a joiner that refused
+        // the lobby (other mode or version) leaves without ever starting the host's link.
+        if(!host_) { announced_=true; log("PEER_READY","\"peer\":"+std::to_string(peer)); }
     }
 }
 void Relay::receive(std::uint64_t now) {
@@ -148,6 +161,7 @@ void Relay::receive(std::uint64_t now) {
         }
         const auto frame=decode(message.data);
         peerSeen_=now;
+        if(!announced_) { announced_=true; log("PEER_READY","\"peer\":"+std::to_string(peer)); }
         switch(frame.kind) {
         case Kind::Ping: break;
         case Kind::Open:

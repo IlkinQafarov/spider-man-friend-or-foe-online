@@ -31,6 +31,16 @@ PAYLOAD = {
     "steam/native/steam_appid.txt": None,
     "compatibility/baseline.json": None,
 }
+# Player edition: the same package paths, built with no automated test or bots (launcher/build-player.cmd,
+# probe/build-player.cmd). Each player binary must carry the edition marker; the other builds must not.
+PLAYER_SOURCES = {
+    "launcher/fof-private-launcher.exe": "launcher/player/fof-private-launcher.exe",
+    "probe/native-probe.dll": "probe/player/native-probe.dll",
+}
+PLAYER_MARKERS = {
+    "launcher/fof-private-launcher.exe": "FOF_PLAYER_EDITION".encode("utf-16-le"),
+    "probe/native-probe.dll": b"FOF_PLAYER_EDITION",
+}
 START = ('@echo off\r\nsetlocal\r\nrem Opened straight from inside the .zip, Windows copies only this file to a temporary folder:\r\nrem say so plainly instead of Windows\' "cannot find fof-private-launcher.exe".\r\nif exist "%~dp0launcher\\fof-private-launcher.exe" goto run\r\nchcp 65001 >nul\r\necho.\r\necho   The package is still inside the .zip file.\r\necho   Right-click the .zip, choose "Extract All...", then open Start.cmd in the extracted folder.\r\necho.\r\necho   Файлы всё ещё внутри .zip-архива.\r\necho   Нажмите на .zip правой кнопкой мыши, выберите «Извлечь все...»,\r\necho   затем откройте Start.cmd в распакованной папке.\r\necho.\r\npause\r\nexit /b 1\r\n:run\r\nstart "" "%~dp0launcher\\fof-private-launcher.exe"\r\n').encode('utf-8')
 README = """# Spider-Man: Friend or Foe — private research prototype
 
@@ -206,11 +216,22 @@ def validate_pe(data: bytes, expected: tuple[int, bool]) -> None:
         raise Rejected("Wrong executable architecture or DLL identity")
 
 
-def collect(root: Path, baseline_sha: str = BASELINE_SHA) -> dict[str, bytes]:
+def player_readme() -> str:
+    head, rest = README.split("## Automated connection check", 1)
+    tail = rest[rest.index("The only supported executable"):]
+    text = head + tail
+    text = text.replace("# Spider-Man: Friend or Foe — private research prototype",
+                        "# Spider-Man: Friend or Foe — online co-op (player edition)")
+    return text.replace("Tested only with bots on one PC", "Tested only with automated tests on one PC") + (
+        "\nPlayer edition: this package has no automated connection test, test bots or\n"
+        "scripted controls; the add-on refuses to start if one is requested.\n")
+
+
+def collect(root: Path, baseline_sha: str = BASELINE_SHA, player: bool = False) -> dict[str, bytes]:
     root = safe_path(root)
     result = {}
     for relative, pe in PAYLOAD.items():
-        source = safe_path(root / relative)
+        source = safe_path(root / (PLAYER_SOURCES.get(relative, relative) if player else relative))
         if not source.is_file():
             raise Rejected("Package input is not a regular file")
         data = source.read_bytes()
@@ -218,6 +239,8 @@ def collect(root: Path, baseline_sha: str = BASELINE_SHA) -> dict[str, bytes]:
         flattened = data.replace(b"\0", b"")
         if re.search(rb"[A-Za-z]:[\\/]Users[\\/]", flattened, re.IGNORECASE):
             raise Rejected("Embedded private user path in package input: " + relative)
+        if relative in PLAYER_MARKERS and (PLAYER_MARKERS[relative] in data) != player:
+            raise Rejected("Wrong edition binary for this package: " + relative)
         if pe is not None:
             validate_pe(data, pe)
         elif relative.endswith("steam_appid.txt"):
@@ -226,12 +249,12 @@ def collect(root: Path, baseline_sha: str = BASELINE_SHA) -> dict[str, bytes]:
         elif digest(data) != baseline_sha:
             raise Rejected("Compatibility baseline pin mismatch")
         result[relative] = data
-    result["README.md"] = README.encode("utf-8")
+    result["README.md"] = (player_readme() if player else README).encode("utf-8")
     result["Start.cmd"] = START
     return result
 
 
-def build(root: Path, name: str, baseline_sha: str = BASELINE_SHA) -> dict:
+def build(root: Path, name: str, baseline_sha: str = BASELINE_SHA, player: bool = False) -> dict:
     validate_name(name)
     root = safe_path(root)
     parent = safe_path(root / "dist", must_exist=False)
@@ -239,13 +262,14 @@ def build(root: Path, name: str, baseline_sha: str = BASELINE_SHA) -> dict:
     if destination.exists():
         raise Rejected("Package destination already exists; nothing was replaced")
     # Finish all input and privacy checks before creating the output directory.
-    payload = collect(root, baseline_sha)
+    payload = collect(root, baseline_sha, player)
     parent.mkdir(exist_ok=True)
     safe_path(parent)
     destination.mkdir()  # Atomic refusal to reuse a concurrent/existing output.
     manifest = {
         "schema": "fof-private-package-v1",
         "status": "unfinished-private-research",
+        "edition": "player" if player else "research",
         "files": {p: {"size": len(data), "sha256": digest(data)}
                   for p, data in sorted(payload.items())},
     }
@@ -340,12 +364,13 @@ def main() -> None:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--selftest", action="store_true")
     mode.add_argument("--build", metavar="NEW_PACKAGE_NAME")
+    parser.add_argument("--player", action="store_true", help="player edition: no automated test or bots")
     args = parser.parse_args()
     try:
         if args.selftest:
             selftest()
         else:
-            print(json.dumps(build(ROOT, args.build), sort_keys=True))
+            print(json.dumps(build(ROOT, args.build, player=args.player), sort_keys=True))
     except (Rejected, OSError) as error:
         parser.exit(1, "Package rejected: " + str(error) + "\n")
 

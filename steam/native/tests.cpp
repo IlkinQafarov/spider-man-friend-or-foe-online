@@ -137,6 +137,25 @@ void validationTests() {
         mustFail([&]{relay.step();},"Wrong lobby tag accepted");
     }
     {
+        // The joiner's mode must match the host's; a host on an older add-on version (plain tag) is told apart.
+        auto reason=[](const char* hostTag,const char* mode) {
+            Hub hub; hub.tag=hostTag; Memory api(hub,1); Relay relay(api,false,0); relay.setMode(mode); relay.start(Lobby);
+            try { relay.step(); } catch(const Failure& error) { return std::string(error.what()); }
+            return std::string("accepted");
+        };
+        check(reason("fof-native-prototype-v1;mode=together","hub")=="PLAY_MODE_MISMATCH host=together","Mode mismatch not reported");
+        check(reason("fof-native-prototype-v1;mode=hub","together")=="PLAY_MODE_MISMATCH host=hub","Reverse mode mismatch not reported");
+        check(reason("fof-native-prototype-v1","hub")=="ADDON_VERSION_MISMATCH","Older host version not reported");
+        check(reason("fof-native-prototype-v1;mode=hub","hub")=="accepted","Matching mode refused");
+    }
+    {
+        // The host announces its partner only after the partner's relay has spoken.
+        Hub hub; Memory api(hub,0); Relay relay(api,true,0); relay.setMode("hub"); relay.start(); relay.step();
+        check(hub.tag=="fof-native-prototype-v1;mode=hub" && relay.peer==202 && !relay.announced(),"Host announced a silent partner");
+        hub.mail[0].push_back({202,encode(Kind::Ping)}); relay.step();
+        check(relay.announced(),"Host did not announce a partner that spoke");
+    }
+    {
         Hub hub; Memory api(hub,0); Relay relay(api,true,0); relay.start(); relay.step();
         api.extra.push_back({Event::Type::Request,999,0,true});
         hub.mail[0].push_back({999,Bytes{0}}); relay.step();

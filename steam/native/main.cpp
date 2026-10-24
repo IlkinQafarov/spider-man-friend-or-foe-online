@@ -66,7 +66,7 @@ int wmain(int argc,wchar_t** argv) {
         if(argc<2) { help(); return 2; }
         const std::wstring role=argv[1];
         if(role!=L"host" && role!=L"join") throw fof::Failure("Role must be host or join");
-        std::wstring path,hash,ready; fof::Id lobby=0,port=49375,seconds=240; bool smoke=false;
+        std::wstring path,hash,ready,mode; fof::Id lobby=0,port=49375,seconds=240; bool smoke=false;
         std::vector<std::wstring> seen;
         for(int i=2;i<argc;++i) {
             const std::wstring option=argv[i];
@@ -81,6 +81,7 @@ int wmain(int argc,wchar_t** argv) {
             else if(option==L"--lobby") lobby=number(value,"lobby ID");
             else if(option==L"--local-port") port=number(value,"local port");
             else if(option==L"--seconds") seconds=number(value,"duration");
+            else if(option==L"--mode") mode=value;
             else throw fof::Failure("Unknown command-line option");
         }
         if(!isAbsolute(path)) throw fof::Failure("Explicit --steam-live absolute DLL path is required");
@@ -89,10 +90,12 @@ int wmain(int argc,wchar_t** argv) {
         if(port<1024 || port>65535 || seconds>600) throw fof::Failure("Invalid local port or duration");
         if(role==L"join" && !lobby) throw fof::Failure("Join requires --lobby");
         if(role==L"host" && lobby) throw fof::Failure("Host creates a lobby; do not supply --lobby");
+        if(mode.size()>16 || std::any_of(mode.begin(),mode.end(),[](wchar_t c){return c<L'a' || c>L'z';})) throw fof::Failure("Invalid play mode");
         if(smoke && role!=L"host") throw fof::Failure("Smoke check creates a host lobby only");
         auto api=fof::steamBackend(path,ascii(hash),false);
         fof::Winsock winsock;
         fof::Relay relay(*api,role==L"host",static_cast<unsigned short>(port),ready);
+        relay.setMode(ascii(mode));
         SetConsoleCtrlHandler(control,TRUE); relay.start(lobby);
         const auto start=GetTickCount64();
         for(;;) {

@@ -98,6 +98,9 @@ class Relay {
     bool openRequested_=false, eof_=false, remoteClosed_=false, closeAck_=false;
     bool writeClosed_=false, localReset_=false;
     std::uint64_t peerSeen_=0, lastPing_=0, doneSince_=0, nextConnect_=0;
+    std::string mode_;
+    bool announced_=false;
+    std::string lobbyTag() const { return mode_.empty()?std::string(Tag):std::string(Tag)+";mode="+mode_; }
     std::vector<Id> checkedMembers();
     void queue(Bytes message);
     void lobbyReady(Id id);
@@ -109,6 +112,9 @@ class Relay {
 public:
     Id lobby=0, peer=0, tx=0, rx=0, discarded=0, rejected=0;
     unsigned memberGaps_=0;
+    // Play mode (hub, together, test). Carried in the lobby tag so a joiner with another mode stops at once.
+    void setMode(std::string mode) { mode_=std::move(mode); }
+    bool announced() const { return announced_; }
     Relay(Backend& api, bool host, unsigned short port, std::wstring readyFile={}):
         api_(api),host_(host),port_(port),readyFile_(std::move(readyFile)) {}
     ~Relay() { close(); }
