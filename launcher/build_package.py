@@ -46,10 +46,11 @@ README = """# Spider-Man: Friend or Foe — private research prototype
 
 This package is unfinished and is not a release.
 
-How to play: the host clicks the big red "Play Game" button and plays
-alone (New Game or Continue; saves are kept in the package's profile folder).
-To invite a friend, press Alt+Tab, click Host and send the lobby code. The friend
-enters the code and clicks Join: their game opens, starts by itself, takes over
+How to play: the host clicks the big red HOST button. The game opens and a lobby
+code appears in the launcher; the host sends it to the friend and plays (New Game
+or Continue; saves are kept in the package's profile folder). The friend pastes
+the code ("Paste code") and clicks the big blue JOIN button, without opening the
+game first: their game opens, starts by itself, takes over
 the host's campaign progress and appears in the Helicarrier hub. From there the
 host walks to the mission computer and both play the missions together, each
 with their own keyboard or controller. In co-op the mouse is not used in game.
@@ -61,19 +62,28 @@ sidekick, the host walks to the sidekick computer and presses Select; the friend
 then picks the character on that screen (only unlocked ones), and player 2 changes
 right away. The host uses the mission computer as before.
 
+Swapping characters: in a mission, either player holds the game's character-switch
+control (TAB on the keyboard; the same control as in single player) for half a second, and
+the two players trade characters: the friend takes Spider-Man and the host the
+sidekick, or back again. The swap stays for the next missions until someone
+swaps back. In the Helicarrier hub the host always walks Spider-Man.
+
+Audio settings: the main menu's Options now has Audio Settings too (the same
+screen as in the hub). Its first entry, saving the game, only works once a game
+is loaded. The game runs at 60 frames per second, alone and in co-op.
+
 If one player skips a movie or cutscene and the other watches it, the game that
 is ahead pauses at the next menu or the hub until the other one catches up.
 While it waits, a small box says "Waiting for your partner..." in the launcher's
 language; it closes by itself when the game continues.
 
-Starting a new campaign together: both players tick "Start a new campaign
-together" (with no game open), then Host / Join as usual. Both games start once
-the friend is connected. Skip the logo videos; the host picks New Game and
-confirms the save slot (each PC uses its own first empty slot automatically), and
-both of you watch the opening and play on together. The host keeps this campaign
-in the package's profile folder and can later Continue it alone and invite the
-friend with Host as above. In this mode only the host's menu choices count;
-choices the co-op route cannot follow (anything but New Game) do nothing.
+Watching the opening together happens by itself: if the friend clicks JOIN while
+the host is still in the main menu (before starting a game), the host's game
+waits a moment for the friend's game to reach its main menu too. Then the host
+picks New Game and both of you watch the opening and play on together (each PC
+uses its own first empty save slot). If the host picks Continue instead, the
+friend joins in the Helicarrier as usual. If the host is already playing when the
+friend joins, the friend joins in the Helicarrier.
 
 Tested only with bots on one PC: the host playing alone and a friend joining in
 the hub, then a mission together; New Game, hub, the first Tokyo mission and the
@@ -92,8 +102,8 @@ reconnecting.
    remembered. The game's own language (English or Russian files) is chosen
    separately under "Game language". Windows x64 and the existing .NET Framework are required;
    Python is not needed to run this package.
-3. Choose English or Russian independently. Use Import installed folder to
-   select your own supported game copy. Import checks the game and links its
+3. Choose English or Russian independently. Use "Locate game install" to
+   select your own supported game copy. It checks the game and links its
    files into this package (no second copy on disk) when the package is on the
    same drive as the game; on another drive it copies them (about 3.2 GB).
    Your installed game is never changed: the add-on refuses any write to a
@@ -114,8 +124,8 @@ reconnecting.
    "Game's own settings (original fullscreen)" uses the resolution saved in
    the game's own options on this PC and its original fullscreen; Alt+Tab then
    behaves like the original game (it may flicker or pause your partner).
-   The big red "Play Game" button starts the game right away, alone,
-   without Steam or a friend; the host's progress is kept in the profile folder.
+   HOST opens the game and the lobby at once (Steam must be open); the host's
+   progress is kept in the profile folder.
    The launcher also remembers the game folder you imported from.
 6. For an explicitly authorized account session, run Steam signed in, then use
    Host or Join. Host shows a numeric lobby code to exchange manually. Join

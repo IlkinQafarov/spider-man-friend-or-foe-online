@@ -70,7 +70,7 @@ def no_reparse(path, new=False):
     return path
 
 
-def environment(source, seat, diagnostics=True, campaign=False, deferred=False, profile=None, hub_spawn=-1, skip_nis=False):
+def environment(source, seat, diagnostics=True, campaign=False, deferred=False, profile=None, hub_spawn=-1, skip_nis=False, auto_together=True):
     env = {key: value for key, value in source.items() if not key.upper().startswith("COOP_PROBE_")}
     values = {
         "AUTOTEST": "ExecutionPath", "INPUTBOT": "0", "PLAYBOT": "0", "ACTIONBOT": "0",
@@ -90,6 +90,12 @@ def environment(source, seat, diagnostics=True, campaign=False, deferred=False, 
             values["NET_MODE"] = "deferred"
         if profile:
             values["PROFILE"] = str(profile)
+        if not auto_together:
+            values["AUTO_TOGETHER"] = "0"
+        if os.environ.get("FOF_RESEARCH_HOST_WAIT_LINK") == "1" and seat == "host":
+            values["HOST_WAIT_LINK"] = "1"
+            if os.environ.get("FOF_RESEARCH_HOST_CONTINUE") == "1":
+                values["HOST_CONTINUE"] = "1"
         if hub_spawn >= 0:
             values["HUB_SPAWN"] = str(hub_spawn)
         if skip_nis:
@@ -336,7 +342,8 @@ def run(args):
                 str(ROOT / "test" / LANGUAGES[i].lower() / "Game.exe"), str(boxes[i])],
                 launcher_logs[i], environment(os.environ, seat, not args.quiet, args.campaign, args.deferred_connect > 0 or args.join_at_hub,
                             host_profile if (args.join_at_hub or args.together) and seat == "host" else None, args.hub_spawn,
-                            args.skip_cutscenes == "both" or (args.skip_cutscenes == "host" and seat == "host")), seat + "-launcher")
+                            args.skip_cutscenes == "both" or (args.skip_cutscenes == "host" and seat == "host"),
+                            not args.no_auto_together), seat + "-launcher")
             launchers.append(process)
             lane.register_launcher(process)
         last_report = 0
@@ -383,7 +390,7 @@ def run(args):
                 games[1] = None
                 launchers[1] = popen([str(ROOT / "probe" / "native-launcher.exe"), "--play",
                     str(ROOT / "test" / LANGUAGES[1].lower() / "Game.exe"), str(boxes[1])],
-                    launcher_logs[1], environment(os.environ, "peer", not args.quiet, args.campaign, True, None), "peer2-launcher")
+                    launcher_logs[1], environment(os.environ, "peer", not args.quiet, args.campaign, True, None, auto_together=not args.no_auto_together), "peer2-launcher")
                 lane.register_launcher(launchers[1])
                 connected, rejoin_stage = False, 2
                 event("HOST_CONTINUED_ALONE_REPLACEMENT_PEER_STARTED")
@@ -565,6 +572,8 @@ def main(argv=None):
     parser.add_argument("--frames", type=int, default=300)
     parser.add_argument("--one-sided-stop", action="store_true", help="Close only the owned host; peer must receive explicit normal-stop and exit0")
     parser.add_argument("--quiet", action="store_true", help="Verify sparse logging every120 ticks and no diagnostic images; live checksums still run every tick")
+    parser.add_argument("--no-auto-together", action="store_true",
+                        help="Keep the plain join-at-hub route even when the host is still in the main menu")
     parser.add_argument("--join-at-hub", action="store_true",
                         help="With --campaign: host plays New Game alone to the hub, then the joiner catches up and both play on")
     parser.add_argument("--rejoin", action="store_true",
@@ -597,8 +606,8 @@ def main(argv=None):
         parser.error("--deferred-connect must be 1..300 seconds and requires --campaign")
     if args.together and (not args.campaign or args.join_at_hub or args.deferred_connect):
         parser.error("--together requires --campaign and excludes --join-at-hub/--deferred-connect")
-    if args.seed_save and not (args.together and Path(args.seed_save).is_file()):
-        parser.error("--seed-save requires --together and an existing file")
+    if args.seed_save and not ((args.together or args.join_at_hub) and Path(args.seed_save).is_file()):
+        parser.error("--seed-save requires --together or --join-at-hub and an existing file")
     if args.rejoin and not args.join_at_hub:
         parser.error("--rejoin requires --join-at-hub")
     if args.join_at_hub and (not args.campaign or args.deferred_connect):

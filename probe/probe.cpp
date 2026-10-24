@@ -40,6 +40,14 @@ static unsigned networkRole=0,networkTick=0;
 // later through <sandbox>\connect.json. A late partner then joins at the hub: the host sends its
 // campaign progress, the joiner starts New Game alone, takes that progress and meets the host in the hub.
 static bool networkDeferred=false,campaignJoinPending=false,campaignJoinSent=false,campaignJoinReceived=false,campaignJoined=false;
+// Automatic start together: a partner who links while the host still waits in the main menu (no game loaded yet
+// this session) watches the opening with the host (the route of "Start a new campaign together"). The host's
+// Continue there falls back to joining at the hub. campaignSoloLoaded: this game already loaded a level alone.
+static bool campaignAutoTogether=false,campaignTogetherOffered=false,campaignSoloLoaded=false,campaignAutoTogetherEnabled=true;
+// Research (COOP_PROBE_HOST_WAIT_LINK=1, host bot): stay in the main menu until a partner links, as a person waiting would.
+static bool campaignHostWaitLink=false;
+// Research (COOP_PROBE_HOST_CONTINUE=1, with HOST_WAIT_LINK): the host bot picks Continue after starting together.
+static bool campaignHostContinue=false;
 static BYTE campaignJoinProgress[0x1fc];static unsigned campaignJoinSelected=0;
 static wchar_t profileRoot[32768];
 static bool campaignMode=false,campaignFixture=false;
@@ -55,6 +63,11 @@ static unsigned networkInputHash[2]={0,0};
 static std::uint64_t networkState=0;
 static bool networkJitterFixture=false;
 static bool networkPauseFixture=false;
+// Research (COOP_PROBE_MENU_FIXTURE=1, solo Play): walks main menu -> Options -> Audio and back, then closes the game.
+static bool menuFixture=false,menuContinueFixture=false,menuNavFixture=false;static DWORD menuNavAction=~0u;
+static bool mainMenuAudio=false;
+// Research (COOP_PROBE_SWAP_FIXTURE=1, host): holds the character-switch action at ticks 600-649 and 1500-1549.
+static bool swapFixture=false;
 static bool networkMutateFixture=false,networkCloseRequested=false;
 static coop::Digest networkContent={};
 static bool networkContentVerified=false;
@@ -77,6 +90,10 @@ static unsigned displayWidth=640,displayHeight=480,displayMode=0;
 static bool networkPathSync=false;
 static bool networkAmbientSplit=false;
 static DWORD networkAmbientRng=0x84f19a21;
+// Co-op character swap state (networkSwapSlot).
+// Raw action of the game's character switch (keyboard TAB, scan 0F; run menu-audio-001 binding log).
+static const unsigned networkSwapAction=13;
+static bool networkSwapped=false,networkSwapLatched=false;static unsigned networkSwapHeld=0;
 // Solo: one player, original input, no network; only sandbox and display handling.
 static bool humanInputMode=false,humanInputFixture=false,virtualPadSelected=false,soloMode=false;
 static bool probeDiagnostics=true;
@@ -289,15 +306,17 @@ static void capture(IDirect3DDevice9* device,unsigned frame){
     }while(false);
     if(file!=INVALID_HANDLE_VALUE)CloseHandle(file);if(locked)memory->UnlockRect();if(memory)memory->Release();if(resolved)resolved->Release();if(back)back->Release();log("game-only backbuffer capture frame=%u hr=%08lx width=%u height=%u",frame,hr,desc.Width,desc.Height);
 }
-static volatile LONG campaignCaptureAt=0;
+static volatile LONG campaignCaptureAt=0;static volatile LONG campaignCaptureTag=0;
 static HRESULT WINAPI present(IDirect3DDevice9*p,const RECT*a,const RECT*b,HWND c,const RGNDATA*d){
     static ULONGLONG started=0;static unsigned lastCapture=0;
     ULONGLONG now=GetTickCount64();if(!started)started=now;unsigned seconds=(unsigned)((now-started)/1000);
     unsigned n=++presentCalls;
     // Research: screenshots shortly after a requested moment (frame numbers 300000+offset).
-    if(campaignCaptureAt){LONG offset=(LONG)n-campaignCaptureAt;if(offset==30||offset==90||offset==180||offset==300)capture(p,300000+offset);if(offset>300)campaignCaptureAt=0;}if(n==1||n%6000==0){log("D3D Present count=%u elapsed_s=%u",n,seconds);if(!selfTest)log("read-only state rng=%08lx sim_mode=%lu fixed_sim_fps=%g",*(volatile DWORD*)0x58cf24,*(volatile DWORD*)0x69ed24,*(volatile float*)0x591df8);}
+    if(campaignCaptureAt){LONG offset=(LONG)n-campaignCaptureAt;if(offset==30||offset==90||offset==180||offset==300)capture(p,300000+campaignCaptureTag*1000+offset);if(offset>300)campaignCaptureAt=0;}if(n==1||n%6000==0){log("D3D Present count=%u elapsed_s=%u",n,seconds);if(!selfTest)log("read-only state rng=%08lx sim_mode=%lu fixed_sim_fps=%g",*(volatile DWORD*)0x58cf24,*(volatile DWORD*)0x69ed24,*(volatile float*)0x591df8);}
     if(n==120)capture(p,n);if(seconds>=5&&seconds/5>lastCapture){lastCapture=seconds/5;capture(p,200000+seconds);}
-    if(playBot||networkRole){
+    // 60 frames per second, as in co-op lockstep, also when a player plays alone: uncapped, the game ran at about
+    // 375 fps (owner session 20261023T173158472) and characters could not walk onto low floor plates.
+    if(playBot||networkRole||humanInputMode||soloMode){
         static LARGE_INTEGER frequency={0},next={0};LARGE_INTEGER counter;
         if(!frequency.QuadPart)QueryPerformanceFrequency(&frequency);QueryPerformanceCounter(&counter);
         if(!next.QuadPart||counter.QuadPart>next.QuadPart+frequency.QuadPart/20)next.QuadPart=counter.QuadPart;
@@ -486,6 +505,7 @@ static coop::Actions physicalFixtureActions(bool analog){
         // Host-only accept pulse; lockstep input delivers it to both seats on the same tick.
         DWORD mode[3]={};if(captureGameMode(mode)&&mode[0]==1){if(networkRole==1&&networkTick%60<2)actions[10]=1.0f;return actions;}
         unsigned direction=((networkTick/120+networkRole)%2)?18:19;actions[direction]=0.65f;return actions;}
+    if(swapFixture&&networkRole==1&&((networkTick>=600&&networkTick<650)||(networkTick>=1500&&networkTick<1550))){coop::Actions actions={};actions[networkSwapAction]=1.0f;return actions;}
     // Inject before native binding/filtering, so the native-axis oracle still
     // compares the actual captured provider state with its ordinary replay.
     if(networkPauseFixture&&networkTick>=234&&networkTick<=430){
@@ -670,8 +690,8 @@ static bool campaignPartnerLost(const char* why){
     if(!campaignJoined||networkRole!=1)return false;
     log("NET PARTNER_LOST %s; host continues alone and can Host again",why);
     networkWire->Close();networkReady=networkFailed=networkComplete=false;networkRole=0;networkDeferred=true;networkTick=0;networkInputClock=false;
-    campaignJoinPending=campaignJoinSent=campaignJoinReceived=campaignJoined=false;campaignMission=campaignGameplay=false;
-    campaignPhaseSequence=0;campaignLoadSequence=0;campaignCycle=0;campaignHubPartnerReset();applyNetworkActions(0,{});applyNetworkActions(1,{});return true;
+    campaignJoinPending=campaignJoinSent=campaignJoinReceived=campaignJoined=false;campaignMission=campaignGameplay=false;campaignAutoTogether=campaignTogetherOffered=false;
+    campaignPhaseSequence=0;campaignLoadSequence=0;campaignCycle=0;campaignHubPartnerReset();networkSwapped=networkSwapLatched=false;networkSwapHeld=0;applyNetworkActions(0,{});applyNetworkActions(1,{});return true;
 }
 static void networkFinishScript(){
     if(!networkWire->Finish()){networkFailed=true;log("NET FAIL finish %s",networkWire->Error().c_str());return;}
@@ -681,6 +701,15 @@ static void networkFinishScript(){
     if(marker==INVALID_HANDLE_VALUE){networkFailed=true;log("NET FAIL completion marker error=%lu",GetLastError());return;}
     const char message[]="Paired bot frame limit completed. Transport and state logs require review.\r\n";DWORD written=0;BOOL saved=WriteFile(marker,message,sizeof(message)-1,&written,0);FlushFileBuffers(marker);CloseHandle(marker);if(!saved||written!=sizeof(message)-1){networkFailed=true;log("NET FAIL completion marker write");}
     applyNetworkActions(0,{});applyNetworkActions(1,{});return;
+}
+// Character swap in co-op: either player holds the game's character-switch action (TAB on the keyboard) for half a
+// second and the two players trade characters. Computed from the exchanged inputs of the same tick, so both games
+// swap on the same frame; the native switch itself stays off while two people play. Kept until swapped back.
+static unsigned networkSwapSlot(coop::Actions& host,coop::Actions& partner){
+    bool held=host[networkSwapAction]>0.5f||partner[networkSwapAction]>0.5f;host[networkSwapAction]=0;partner[networkSwapAction]=0;
+    if(!held){networkSwapHeld=0;networkSwapLatched=false;}
+    else if(!networkSwapLatched&&++networkSwapHeld>=30){networkSwapped=!networkSwapped;networkSwapLatched=true;log("NET CHARACTER_SWAP tick=%u host_slot=%u",networkTick,networkSwapped?1u:0u);}
+    return networkSwapped?1u:0u;
 }
 static void networkInput(){
     if(networkFailed||networkComplete){applyNetworkActions(0,{});applyNetworkActions(1,{});if(networkFailed&&gameWindow&&!networkCloseRequested){networkCloseRequested=true;log("NET failure requests normal close of owned game window");PostMessageW(gameWindow,WM_CLOSE,0,0);}return;}
@@ -698,7 +727,8 @@ static void networkInput(){
         networkFailed=true;log("NET FAIL frame=%u %s",networkTick,networkWire->Error().c_str());applyNetworkActions(0,{});applyNetworkActions(1,{});return;}
     if(networkTick>=3&&remoteState!=states[(networkTick-3)%32]){networkFailed=true;log("NET FAIL shared-state divergence observed_tick=%ld own=%016llx peer=%016llx",(LONG)networkTick-4,states[(networkTick-3)%32],remoteState);return;}
     coop::Actions delayed=networkTick<3?coop::Actions{}:history[(networkTick-3)%32];
-    applyNetworkActions(networkRole==1?0:1,delayed);applyNetworkActions(networkRole==1?1:0,remote);++networkTick;
+    coop::Actions& host=networkRole==1?delayed:remote;coop::Actions& partner=networkRole==1?remote:delayed;
+    unsigned hostSlot=networkSwapSlot(host,partner);applyNetworkActions(hostSlot,host);applyNetworkActions(1-hostSlot,partner);++networkTick;
 }
 // Native constructor4E1EFB writes vtables at+0/+28, zeroes2C/30,
 // and initializes5C=FFFFFFFF (4E1F29..37). Called only after gameplay setup.
@@ -943,7 +973,10 @@ static unsigned campaignProgress(){BYTE progress[0x1fc]={};if(!readMemory((void*
 static coop::PhaseState campaignState(unsigned kind,unsigned id,unsigned selection){
     coop::PhaseState state={};state.kind=kind;state.id=id;state.selection=selection;state.flags=coop::phaseReady;state.content=networkContent;
     const char tag[]="fof-retail-menu-v1";memcpy(state.identity.data(),tag,sizeof(tag)-1);
-    state.auxiliary[1]=campaignProgress();state.auxiliary[2]=readWord(0x69c624);state.auxiliary[3]=readWord(0x69eb0c);state.auxiliary[4]=0;
+    state.auxiliary[1]=campaignProgress();state.auxiliary[2]=readWord(0x69c624);state.auxiliary[4]=0;
+    // Native operation 69EB0C (0 New Game, 2 load) only means something in the main menu and save list; a host that
+    // Continued keeps 2 for the rest of the session while a joiner's New Game has 0 (auto-continue-409 hub mismatch).
+    state.auxiliary[3]=kind==coop::phaseMenu&&(id==1||id==2)?readWord(0x69eb0c):0;
     state.auxiliary[5]=1;state.auxiliary[6]=readWord(readWord(0x69e72c)+8);state.auxiliary[7]=readWord(readWord(0x6a9940)+0x4e4);return state;
 }
 // Menus, hub and load barriers: the partner may be minutes behind (cutscenes and movies are not synced, so one player
@@ -1210,7 +1243,9 @@ static void campaignHostSendJoin(){
 static bool campaignJoinerReceive(){
     if(campaignJoinReceived)return true;if(!networkWire->PhaseAvailable(campaignPhaseSequence))return false;
     BYTE progress[0x1fc]={};
-    for(unsigned part=0;part<8;part++){auto peer=campaignExchange(campaignJoinState(0x30000+part));if(peer.id!=0x30000+part)campaignReject("join progress part order");campaignJoinUnpack(peer,part,progress);}
+    for(unsigned part=0;part<8;part++){auto peer=campaignExchange(campaignJoinState(0x30000+part));
+        if(part==0&&peer.id==0x30200){campaignJoinPending=false;campaignAutoTogether=true;networkWire->SetTimeout(120000);log("CAMPAIGN AUTO_TOGETHER joiner: host is in the main menu; starting together");return false;}
+        if(peer.id!=0x30000+part)campaignReject("join progress part order");campaignJoinUnpack(peer,part,progress);}
     auto done=campaignJoinState(0x30008);done.auxiliary[1]=campaignBytesHash(progress,sizeof(progress));auto peer=campaignExchange(done);
     if(peer.id!=done.id||peer.auxiliary[1]!=done.auxiliary[1])campaignReject("join progress transfer checksum");
     memcpy(campaignJoinProgress,progress,sizeof(progress));campaignJoinSelected=peer.auxiliary[2];campaignJoinReceived=true;campaignJoined=true;
@@ -1221,6 +1256,15 @@ static void campaignJoinReady(){
     auto state=campaignJoinState(0x30100);state.auxiliary[1]=campaignProgress();state.auxiliary[2]=readWord(0x69c624);auto peer=campaignExchange(state);
     if(peer.id!=state.id||peer.auxiliary[1]!=state.auxiliary[1]||peer.auxiliary[2]!=state.auxiliary[2])campaignReject("joined hub progress mismatch");
     campaignJoinPending=false;networkWire->SetTimeout(30000);log("CAMPAIGN ASSERT JOIN_COMPLETE progress=%08x role=%u",state.auxiliary[1],networkRole);
+}
+// Native list cursor (4AD688: ESI = menu list, stack = row; ret 4).
+static void nativeListSelect(DWORD list,DWORD row){
+    __asm {push esi
+        mov esi,list
+        push row
+        mov eax,0x4ad688
+        call eax
+        pop esi}
 }
 static bool campaignSaveSlotUsed(unsigned row){
     wchar_t path[32768];_snwprintf(path,32768,L"%s\\Documents\\Activision\\Spider-Man FoF\\Saved Games\\SavedGame%u.SFOFSaveGame",profileRoot[0]?profileRoot:sandbox,row+1);
@@ -1282,6 +1326,7 @@ static bool campaignMenuBegin(void* object,unsigned kind,DWORD listOffset){
             // Only validated default New Game, native slot0 and available first
             // mission choices. Unknown modal classes get no invented actions.
             if(calls>=60&&calls%120==60&&(kind==1||kind==2||kind==4||kind==5||kind==6))bits=1u<<10;
+            if(kind==1&&campaignHostContinue&&campaignAutoTogether&&selection!=1){if(list)nativeListSelect(list,1);bits=0;}
             if(kind==2&&selection!=freeRow)bits=0;
             // The mission list fills its rows' availability a little after it opens; press only on an available row
             // (runs hubspawn-141/147 pressed too early: "native mission row is not available").
@@ -1299,7 +1344,7 @@ static bool campaignMenuBegin(void* object,unsigned kind,DWORD listOffset){
             // save slot, which would ask to overwrite on this PC only, an unavailable mission, Accept away from the
             // hub terminal) simply does nothing, instead of stopping both games.
             bool allowed=true;
-            if(kind==1)allowed=selection==0;
+            if(kind==1)allowed=selection==0||(campaignAutoTogether&&selection==1);
             if(kind==2)allowed=selection==freeRow;
             if(kind==3)allowed=selection==campaignMissionGraphHash()||selection==campaignSidekickTerminal;
             if(kind==4)allowed=selection<4&&available;
@@ -1329,6 +1374,8 @@ static bool campaignMenuBegin(void* object,unsigned kind,DWORD listOffset){
         if(kind==5&&local&&!coop::CampaignSaveAckReady(campaignSaveAckFacts(scene,selection)))local=0;
         if(kind==6&&local&&!coop::CampaignAutosaveNoticeReady(campaignAutosaveNoticeFacts(scene,selection)))local=0;
         if(kind==2&&selection>2)local=0;
+        // A joiner whose main menu row followed the host (auto together, then the host's Continue) starts New Game: row 0.
+        if(kind==1&&selection!=0){local=0;if(list)nativeListSelect(list,0);}
         static unsigned localLogs=0;if(localLogs<200&&(local||calls%60==0)){++localLogs;log("CAMPAIGN LOCAL_DRIVE kind=%u selection=%ld calls=%u press=%08x",kind,(LONG)selection,calls,local);}
         coop::Actions shared={};for(unsigned i=0;i<28;i++)if(local&(1u<<i))shared[i]=1;applyNetworkActions(0,shared);applyNetworkActions(1,{});campaignMenuContext=scene;campaignMenuKind=kind;return true;
     }
@@ -1372,6 +1419,14 @@ static bool campaignMenuBegin(void* object,unsigned kind,DWORD listOffset){
                 missionNav=1u<<(sideways?(down?3:2):(down?1:0));
                 static unsigned navLogs=0;if(navLogs++<60)log("CAMPAIGN MISSION_SYNC role=%u selection=%ld host_row=%ld nav=%08x",networkRole,(LONG)selection,(LONG)hostRow,missionNav);}}
     }
+    // Main menu: its cursor follows the keyboard/pad directly, not the shared actions (run menu-nav-016: no applied
+    // action moved it), so a host moving the cursor leaves the joiner's row behind. The joiner's row is set to the
+    // host's each frame; nothing is accepted until both rows agree.
+    if(kind==1&&state.selection!=peer.selection){
+        auto masked=peer;masked.selection=state.selection;
+        if(coop::CampaignMenuAgreement(state,masked)!=coop::CampaignAgreement::invalid)agreement=coop::CampaignAgreement::waiting;
+        if(networkRole==2&&list&&peer.selection<4){nativeListSelect(list,peer.selection);static unsigned rowLogs=0;if(rowLogs++<40)log("CAMPAIGN MAIN_MENU_ROW joiner follows host row=%lu from=%ld",peer.selection,(LONG)selection);}
+    }
     if(agreement==coop::CampaignAgreement::waiting){campaignNeutralMenu();
         if(kind==4&&missionNav){coop::Actions nav={};for(unsigned i=0;i<28;i++)if(missionNav&(1u<<i))nav[i]=1;applyNetworkActions(0,nav);applyNetworkActions(1,{});}
         // Feed the slot cursor every frame (released between pulses), as the local drive does: clearing the
@@ -1384,6 +1439,15 @@ static bool campaignMenuBegin(void* object,unsigned kind,DWORD listOffset){
             state.auxiliary[0],state.auxiliary[1],state.auxiliary[2],state.auxiliary[3],state.auxiliary[4],state.auxiliary[5],state.auxiliary[6],state.auxiliary[7],
             peer.auxiliary[0],peer.auxiliary[1],peer.auxiliary[2],peer.auxiliary[3],peer.auxiliary[4],peer.auxiliary[5],peer.auxiliary[6],peer.auxiliary[7],state.identity==peer.identity?1u:0u);
         campaignReject("native menu row/availability/progress mismatch");}
+    // Auto together: the host chose Continue. Both seats return to joining at the hub; only the host's game continues
+    // (the joiner waits in its main menu for the host's progress, as after an ordinary Join).
+    if(campaignAutoTogether&&kind==1&&selection==1&&(hostBits&(1u<<10))){
+        state.auxiliary[0]=hostBits;state.flags=coop::phaseReady|coop::phaseConfirmed;peer=campaignExchange(state);
+        if(!coop::CampaignPhaseEqual(state,peer))campaignReject("host Continue was not mutually confirmed");
+        campaignAutoTogether=false;campaignJoinPending=true;networkWire->SetTimeout(120000);log("CAMPAIGN AUTO_TOGETHER host chose Continue; partner joins at the hub instead (role=%u)",networkRole);
+        if(networkRole==1){coop::Actions accept={};accept[10]=1;applyNetworkActions(0,accept);}else campaignNeutralMenu();
+        applyNetworkActions(1,{});campaignMenuContext=scene;campaignMenuKind=kind;return networkRole!=1;
+    }
     if(hostBits&(1u<<10)){
         if(kind==3&&selection!=campaignMissionGraphHash()&&selection!=campaignSidekickTerminal)campaignReject("hub Accept outside the mission and sidekick terminals");
         if(kind==7&&!campaignSidekickRowAvailable(selection))campaignReject("sidekick row is not unlocked");
@@ -1406,10 +1470,20 @@ static bool campaignMenuBegin(void* object,unsigned kind,DWORD listOffset){
 }
 static bool __cdecl campaignMainAccept(DWORD* winner){
     bool accepted=((bool(__cdecl*)(DWORD*))0x497e78)(winner);
-    if(campaignLive()&&accepted){if(campaignMenuKind!=1||!campaignMenuContext||readWord(readWord(campaignMenuContext+0x84)+0x8d08)!=0)campaignReject("first retail slice supports native New Game only");campaignMainAcceptObserved=true;}
+    // A host still playing alone before the join (bot local drive after an auto-together Continue) may Continue.
+    if(campaignLive()&&accepted){bool newGame=campaignMenuKind==1&&campaignMenuContext&&readWord(readWord(campaignMenuContext+0x84)+0x8d08)==0;
+        if(newGame)campaignMainAcceptObserved=true;else if(!(campaignJoinPending&&networkRole==1&&!campaignJoinSent))campaignReject("first retail slice supports native New Game only");}
     return accepted;
 }
 static void __fastcall campaignMainUpdate(void* scene,void*,float dt){
+    // Host linked while still in the main menu (nothing loaded alone yet): offer the joiner to start together.
+    if(campaignMode&&campaignJoinPending&&networkRole==1&&!campaignJoinSent&&!campaignTogetherOffered&&!campaignSoloLoaded&&campaignAutoTogetherEnabled){
+        BYTE active=0;readMemory((BYTE*)scene+0x7a,&active,1);
+        if(active){campaignTogetherOffered=true;campaignJoined=true;log("CAMPAIGN AUTO_TOGETHER host offer from the main menu");campaignExchange(campaignJoinState(0x30200));
+            if(networkReady&&!networkComplete&&campaignJoinPending){campaignJoinPending=false;campaignAutoTogether=true;log("CAMPAIGN AUTO_TOGETHER host: partner is in its main menu; starting together");}
+            campaignNeutralMenu();originalCampaignMain(scene,dt);return;}
+    }
+    if(campaignHostWaitLink&&campaignFixture&&networkDeferred){campaignNeutralMenu();originalCampaignMain(scene,dt);return;}
     if(!campaignLive()){originalCampaignMain(scene,dt);return;}bool active=campaignMenuBegin(scene,1,0x84);originalCampaignMain(scene,dt);
     if(active&&campaignMainAcceptObserved&&!campaignNewGame){if(readWord(0x69eb0c)!=0||readWord(0x58731c)!=0)campaignReject("native New Game result mismatch");campaignNewGame=true;if(networkWire&&networkReady)networkWire->SetTimeout(30000);log("CAMPAIGN ASSERT NEW_GAME operation=0 selection=0");}campaignNeutralMenu();campaignMenuContext=0;
 }
@@ -1786,6 +1860,49 @@ static void campaignBotSkipNis(){
         call ecx}
     log("BOT NIS_SKIP count=%u",++skips);
 }
+// Research menu walk (menuFixture): one forced menu action at a time through the game's own forced-action field.
+// Logs every scene change; PASS needs Options = scene 11 with the cursor on Audio, Audio = scene 12, the Save Game
+// entry ignored, and the return to the main menu (2). Then the game is closed normally.
+// Native scene object for a scene id (registry at 6A9940+4: object, id pairs; count at +404).
+static DWORD sceneObject(DWORD id){DWORD manager=readWord(0x6a9940),count=readWord(manager+0x404);if(!manager||count>128)return 0;for(DWORD i=0;i<count;i++)if(readWord(manager+8+i*8)==id)return readWord(manager+4+i*8);return 0;}
+static void keyboardBindingsLog(){
+    static bool logged=false;DWORD keyboard=readWord(0x595570),wrapper=readWord(0x595390),count=readWord(0x5955cc),descriptors=readWord(0x5955c8);
+    if(logged||!keyboard||!wrapper||readWord(wrapper)<28||!descriptors)return;logged=true;char line[512]="";
+    for(unsigned action=0;action<28;action++){DWORD head=readWord(wrapper+0x10)+action*8,node=readWord(head+4);
+        for(unsigned traversed=0;node&&node!=head&&traversed<64;traversed++,node=readWord(node+4))if(readWord(node+8)==keyboard){DWORD key=readWord(node+12);if(key<count&&key<256){char item[24];_snprintf_s(item,sizeof(item),_TRUNCATE," %u:%02lx",action,readWord(descriptors+key*0xa4));strcat_s(line,item);}}}
+    log("INPUT KEYBOARD_BINDINGS action:scan%s",line);
+}
+static bool menuFixtureStep(DWORD flow,ULONGLONG elapsed,DWORD forcedAddress){
+    static unsigned step=0;static ULONGLONG last=0;static DWORD previous=~0u;static unsigned presentsAtMenu=0;static ULONGLONG menuAt=0;
+    DWORD manager=readWord(0x6a9940),scene=manager?readWord(manager+0x4e4):~0u;keyboardBindingsLog();
+    if(scene!=previous){log("MENU_FIXTURE scene=%lu step=%u flow=%lu",scene,step,flow?readWord(flow+8):0);previous=scene;last=elapsed;campaignCaptureTag=(LONG)scene;campaignCaptureAt=(LONG)presentCalls;}
+    if(!flow||elapsed<4000||elapsed-last<2500||step>=(menuContinueFixture?10u:6u))return false;
+    DWORD object=sceneObject(scene),list=object?readWord(object+0x84):0,selection=list?readWord(list+0x8d08):~0u;
+    auto press=[&](DWORD raw,const char* what){*(DWORD*)forcedAddress=raw;last=elapsed;log("MENU_FIXTURE press=%s step=%u scene=%lu selection=%ld",what,step,scene,(LONG)selection);return true;};
+    // Logos, legal and movies before the main menu: Start, as a player skipping them.
+    if(step==0&&scene!=2)return readWord(flow+8)<8?press(5,"skip"):false;
+    if(menuNavFixture&&step==0&&scene==2&&list){static unsigned probe=0;static const DWORD candidates[]={1,21,17,25,1,21,17};
+        if(probe<7){log("MENU_FIXTURE nav before action=%lu selection=%ld",probe?candidates[probe-1]:0ul,(LONG)selection);menuNavAction=candidates[probe++];last=elapsed;return false;}
+        log("MENU_FIXTURE nav final selection=%ld",(LONG)selection);step=6;if(gameWindow)PostMessageW(gameWindow,WM_CLOSE,0,0);return false;}
+    if(step==0&&scene==2&&list){if(!menuAt){menuAt=elapsed;presentsAtMenu=presentCalls;}if(selection==2){step=1;return press(10,"accept main menu Options");}nativeListSelect(list,2);last=elapsed;{char ids[512]="";DWORD count=readWord(manager+0x404);for(DWORD i=0;i<count&&i<128;i++){char item[16];_snprintf_s(item,sizeof(item),_TRUNCATE," %lu",readWord(manager+8+i*8));strcat_s(ids,item);}log("MENU_FIXTURE registry count=%lu ids:%s",count,ids);}log("MENU_FIXTURE cursor set to Options");return false;}
+    if(step==1&&scene==0x11){log("MENU_FIXTURE options selection=%lu expected=1",selection);if(selection!=1){log("MENU_FIXTURE FAIL cursor not on Audio");step=99;return false;}step=2;return press(10,"accept Audio");}
+    if(step==2&&scene==0x12){if(elapsed-last<4000)return false;step=3;return press(11,"back from Audio");}
+    if(step==3&&scene==0x11){if(selection!=0){nativeListSelect(list,0);last=elapsed;log("MENU_FIXTURE cursor set to Save Game");return false;}step=4;return press(10,"accept Save Game (must be ignored)");}
+    if(step==4&&scene==0x11){log("MENU_FIXTURE save entry ignored scene=%lu",scene);step=5;return press(11,"back to main menu");}
+    if(step==5&&scene==2){ULONGLONG ms=elapsed-menuAt;log("MENU_FIXTURE PASS fps_at_menu=%.1f",ms?(presentCalls-presentsAtMenu)*1000.0/ms:0.0);step=6;if(!menuContinueFixture&&gameWindow)PostMessageW(gameWindow,WM_CLOSE,0,0);return false;}
+    if(step==4&&scene==0x27){log("MENU_FIXTURE FAIL Save Game opened from the main menu");step=99;}
+    // Continue check (COOP_PROBE_MENU_FIXTURE=2, a save seeded in slot 1): volumes chosen in the main menu must survive
+    // loading the save. 2/3/4 stand in for the player's slider changes (the Audio page writes them the same way).
+    if(menuContinueFixture&&step==6&&scene==2&&list){*(DWORD*)0x69c62c=2;*(DWORD*)0x69c630=3;*(DWORD*)0x69c634=4;((void(__cdecl*)())0x4d7c00)();log("MENU_FIXTURE volumes set 2/3/4");
+        nativeListSelect(list,1);step=7;last=elapsed;return false;}
+    if(menuContinueFixture&&step==7&&scene==2){step=8;return press(10,"accept Continue");}
+    if(menuContinueFixture&&step==8&&scene==0x27){DWORD slots=object?readWord(object+0x88):0;if(slots&&readWord(slots+0x8d08)!=0){nativeListSelect(slots,0);last=elapsed;return false;}return press(10,"accept saved game");}
+    if(menuContinueFixture&&step>=8&&step<10&&scene==3)return press(10,"confirm");
+    if(menuContinueFixture&&step>=8&&step<10&&readWord(flow+8)>=16&&scene!=2&&scene!=0x27&&scene!=3){if(step==8){step=9;last=elapsed;return false;}
+        DWORD v[3]={readWord(0x69c62c),readWord(0x69c630),readWord(0x69c634)};log("MENU_FIXTURE continue volumes=%lu/%lu/%lu %s",v[0],v[1],v[2],v[0]==2&&v[1]==3&&v[2]==4?"CONTINUE_PASS":"CONTINUE_FAIL");
+        step=10;if(gameWindow)PostMessageW(gameWindow,WM_CLOSE,0,0);return false;}
+    return false;
+}
 static void __cdecl inputUpdate(float dt){
     campaignBotSkipNis();
     DWORD currentFlow=readWord(0x69e72c);if(networkLockstep()&&currentFlow&&readWord(currentFlow+8)==128)dt=1.0f/60.0f;
@@ -1799,10 +1916,12 @@ static void __cdecl inputUpdate(float dt){
         DWORD pulse=(DWORD)((bootNow-bootStarted-4000)/2500);
         if(pulse!=bootPulse){bootPulse=pulse;*(DWORD*)forcedAddress=pulse%2?5:10;bootAction=true;log("BOOTSTRAP menu action=%lu flow=%lu",pulse%2?5ul:10ul,readWord(currentFlow+8));}
     }
+    if(menuFixture&&!bootAction)bootAction=menuFixtureStep(currentFlow,bootNow-bootStarted,forcedAddress);
     ((void(__cdecl*)(float))0x401b6f)(dt);
     if(bootAction)*(DWORD*)forcedAddress=savedForced;
+    if(menuNavFixture){coop::Actions a={};if(menuNavAction<28)a[menuNavAction]=1.0f;menuNavAction=~0u;if(readWord(readWord(0x6a9940)+0x4e4)==2)applyNetworkActions(0,a);}
     static ULONGLONG last=0;DWORD flow=readWord(0x69e72c);ULONGLONG now=GetTickCount64();
-    if(campaignMode&&networkDeferred)campaignTryConnect();
+    if(campaignMode&&networkDeferred){if(flow&&readWord(flow+8)>=4&&!campaignSoloLoaded){campaignSoloLoaded=true;log("CAMPAIGN SOLO_LOADED flow=%lu (a partner joins at the hub)",readWord(flow+8));}campaignTryConnect();}
     if(campaignLive()&&flow&&readWord(flow+8)!=128){
         campaignPhysicalMenu=captureLocalActions();if(readWord(flow+8)>=8){campaignNeutralMenu();if(campaignHub&&!campaignMission)campaignApplyHubMovement();}
         // Test bots (COOP_PROBE_SKIP_NIS): the movie screen (49FED0) skips on a just-pressed abstract 14 (Start) while
@@ -1859,7 +1978,14 @@ static void __fastcall flowNative(void* vm,void*,unsigned id){
     unsigned n=++flowNativeCalls;if(probeDiagnostics&&(n<=180||id!=lastFlowNative||n%10000==0)){DWORD fields[10]={0},args[4]={0};SIZE_T got=0;
         if(ReadProcessMemory(GetCurrentProcess(),vm,fields,sizeof(fields),&got)&&got==sizeof(fields)&&fields[1]>=16)ReadProcessMemory(GetCurrentProcess(),(void*)(fields[1]-16),args,sizeof(args),&got);
         log("FLOW native count=%u id=%u vm=%p pc=%08lx status=%08lx args=%08lx,%08lx,%08lx,%08lx",n,id,vm,fields[6],fields[9],args[0],args[1],args[2],args[3]);}
-    lastFlowNative=id;if(campaignMode&&!networkDeferred&&id==23)campaignBeforeLoad();originalFlowNative(vm,id);
+    lastFlowNative=id;if(campaignMode&&!networkDeferred&&id==23)campaignBeforeLoad();
+    // Flow native 6 loads one FE scene (id on top of the script stack, 4D9121 -> 4E5FFF). The front end loads 17,
+    // without the Options/Audio screens the hub has; load those two right after the main menu's own Options (1A).
+    // Scenes loaded earlier are drawn on top (run menu-audio-011: Audio loaded after Options stayed hidden under it).
+    DWORD loadScene=id==6?readWord(readWord((DWORD)(ULONG_PTR)vm+4)-4):~0u;
+    originalFlowNative(vm,id);
+    if(mainMenuAudio&&loadScene==0x1a&&!sceneObject(0x11)&&!sceneObject(0x12)){((void(__cdecl*)(DWORD))0x4e5fff)(0x12);((void(__cdecl*)(DWORD))0x4e5fff)(0x11);
+        log("OPTIONS front end also loads scenes 11 (Options) and 12 (Audio): %s",sceneObject(0x11)&&sceneObject(0x12)?"ok":"missing");}
 }
 // 45CB09 builds the 8 character objects once at startup; the first 3 get the large (hero) size. Make it 4, so a
 // hero-size object is left free in the hub, where objects 0..2 are all in use (run hubspawn-124).
@@ -1898,6 +2024,39 @@ static bool patchKeyboardLayoutCall(){
     DWORD ignored=0;bool restored=VirtualProtect((void*)address,6,old,&ignored)!=0;
     log("INPUT verified initializer layout call patched address=%08lx original_iat=%08lx protection_restored=%u",address,iat,restored);
     return flushed&&restored;
+}
+// Audio settings in the main menu (owner request; the retail main menu has none). The main menu's Options entry
+// (49A554 push 1A, main_menu_options.fen: video and controller only) opens scene 11 instead, the Options screen the
+// hub uses (options.fen: game, audio, video, controller); flowNative loads it and the Audio screen (12) in the front
+// end. Its first entry opens scene 16 (Save Game), which needs a loaded game and is not loaded in the front end, so
+// it does nothing while that screen was opened from the main menu (scene 2, choosegame.fen, update 49A4B8), and the
+// cursor starts on Audio there. Runs menu-audio-012 (screens) and 014 (Continue keeps the volumes).
+static bool optionsFromMainMenu(){DWORD manager=readWord(0x6a9940),depth=readWord(manager+0x4e0);return manager&&depth&&depth<=8&&readWord(manager+0x4e4)==0x11&&readWord(manager+0x4c0+(depth-1)*4)==2;}
+static bool __cdecl optionsAccept(DWORD* winner){
+    bool accepted=((bool(__cdecl*)(DWORD*))0x497e78)(winner);DWORD scene=sceneObject(0x11),list=scene?readWord(scene+0x84):0;
+    if(accepted&&list&&readWord(list+0x8d08)==0&&optionsFromMainMenu()){log("OPTIONS main menu: Save Game entry ignored without a loaded game");return false;}
+    return accepted;
+}
+typedef void (__fastcall* SceneActivateFn)(void*,void*);static SceneActivateFn originalOptionsActivate=0;
+static void __fastcall optionsActivate(void* scene,void* edx){
+    originalOptionsActivate(scene,edx);DWORD list=readWord((DWORD)(ULONG_PTR)scene+0x84);if(!list||!optionsFromMainMenu())return;
+    nativeListSelect(list,1);log("OPTIONS main menu: full Options screen, cursor on Audio");
+}
+// Continue (save slot list, 4A5149): the save's own option block replaces the current options (4D7AE0 copies, applies
+// and writes the registry). Keep this PC's latest volumes (registry VolumeDialogue/Music/Sfx at options+1BC..1C4,
+// which the Audio page writes, now also from the main menu) instead of the volumes stored in the save.
+static void __cdecl continueOptions(const BYTE* saved){
+    BYTE copy[0x1fc];memcpy(copy,saved,sizeof(copy));memcpy(copy+0x1bc,(const void*)0x69c62c,12);
+    log("OPTIONS continue keeps this PC's volumes %lu/%lu/%lu (save had %lu/%lu/%lu)",readWord(0x69c62c),readWord(0x69c630),readWord(0x69c634),*(const DWORD*)(saved+0x1bc),*(const DWORD*)(saved+0x1c0),*(const DWORD*)(saved+0x1c4));
+    ((void(__cdecl*)(const BYTE*))0x4d7ae0)(copy);
+}
+static bool installMainMenuAudio(){
+    BYTE* push=(BYTE*)0x49a554;void** table=(void**)0x56d698;
+    if(push[0]!=0x6a||push[1]!=0x1a||push[2]!=0xeb||table[9]!=(void*)0x4a0823||table[19]!=(void*)0x4a0702){log("FAIL main menu options guard");return false;}
+    DWORD old=0;if(!VirtualProtect(push+1,1,PAGE_EXECUTE_READWRITE,&old))return false;push[1]=0x11;DWORD ignored=0;VirtualProtect(push+1,1,old,&ignored);FlushInstructionCache(GetCurrentProcess(),push,2);
+    if(!patchComSlot(table,9,(void*)optionsActivate,(void**)&originalOptionsActivate)||!patchVerifiedCall(0x4a0734,0x497e78,(void*)optionsAccept)||
+       !patchVerifiedCall(0x4a5149,0x4d7ae0,(void*)continueOptions))return false;
+    mainMenuAudio=true;log("OPTIONS main menu opens the full Options screen (audio included)");return true;
 }
 static bool installCampaign(){
     struct Entry{DWORD table,callback;void* hook;CampaignUpdate* original;};
@@ -1945,6 +2104,7 @@ static bool install() {
     if(!selfTest&&humanInputMode)for(DWORD address:deviceCallSites)if(!patchVerifiedCall(address,0x40182d,(void*)reassignLocalDevice))return false;
     if(!selfTest&&humanInputMode&&(!patchKeyboardLayoutCall()||!patchVerifiedCall(0x52a770,0x525c30,(void*)guardedKeyLookup)))return false;
     if(campaignMode&&!installCampaign())return false;
+    if(!selfTest&&!autoTest&&!installMainMenuAudio())return false;
     return true;
 }
 // Research: a hardware write watch on character entry 1's memory owner (6A8808+0x58+0x20 = 6A8880) on the game
@@ -2005,6 +2165,12 @@ BOOL WINAPI DllMain(HINSTANCE h,DWORD why,LPVOID){if(why!=DLL_PROCESS_ATTACH)ret
         if(!wcscmp(networkMode,L"deferred")&&campaignMode&&!humanInputFixture)networkDeferred=true;}
     {wchar_t partner[4]={0};if(GetEnvironmentVariableW(L"COOP_PROBE_HUB_PARTNER",partner,4)&&!wcscmp(partner,L"0"))campaignHubPartner=false;}
     {wchar_t test[4]={0};campaignSidekickTest=GetEnvironmentVariableW(L"COOP_PROBE_HUB_SIDEKICK_TEST",test,4)&&!wcscmp(test,L"1");}
+    {wchar_t test[4]={0};swapFixture=GetEnvironmentVariableW(L"COOP_PROBE_SWAP_FIXTURE",test,4)&&!wcscmp(test,L"1");if(swapFixture&&(!humanInputFixture||networkRole!=1))return FALSE;}
+    // Research: COOP_PROBE_AUTO_TOGETHER=0 keeps the plain join-at-hub route even from the main menu (its bot tests).
+    {wchar_t test[4]={0};if(GetEnvironmentVariableW(L"COOP_PROBE_AUTO_TOGETHER",test,4)&&!wcscmp(test,L"0"))campaignAutoTogetherEnabled=false;}
+    {wchar_t test[4]={0};campaignHostContinue=GetEnvironmentVariableW(L"COOP_PROBE_HOST_CONTINUE",test,4)&&!wcscmp(test,L"1");}
+    {wchar_t test[4]={0};campaignHostWaitLink=GetEnvironmentVariableW(L"COOP_PROBE_HOST_WAIT_LINK",test,4)&&!wcscmp(test,L"1");if(campaignHostWaitLink&&!campaignFixture)return FALSE;if(campaignHostContinue&&!campaignHostWaitLink)return FALSE;}
+    {wchar_t test[4]={0};menuFixture=GetEnvironmentVariableW(L"COOP_PROBE_MENU_FIXTURE",test,4)&&(!wcscmp(test,L"1")||!wcscmp(test,L"2")||!wcscmp(test,L"3"));menuContinueFixture=menuFixture&&!wcscmp(test,L"2");menuNavFixture=menuFixture&&!wcscmp(test,L"3");if(menuFixture&&(!humanInputMode||campaignFixture||networkRole))return FALSE;}
     {wchar_t sound[4]={0};if(GetEnvironmentVariableW(L"COOP_PROBE_HUB_PARTNER_SOUND",sound,4)&&!wcscmp(sound,L"0"))campaignHubPartnerSound=false;}
     {wchar_t skip[4]={0};campaignSkipNis=GetEnvironmentVariableW(L"COOP_PROBE_SKIP_NIS",skip,4)&&!wcscmp(skip,L"1");}
     {wchar_t spawn[8]={0};if(GetEnvironmentVariableW(L"COOP_PROBE_HUB_SPAWN",spawn,8)){wchar_t* end=0;long v=wcstol(spawn,&end,10);if(!end||*end||v<0||(v>31&&v!=99))return FALSE;campaignHubSpawnIndex=(int)v;}}
@@ -2041,7 +2207,7 @@ BOOL WINAPI DllMain(HINSTANCE h,DWORD why,LPVOID){if(why!=DLL_PROCESS_ATTACH)ret
     // Player edition (FOF_PLAYER_EDITION): only the retail campaign runs. Test bots, scripted scenarios and
     // fault fixtures cannot be switched on; asking for one refuses the launch instead of running it.
     if(autoTest||inputBot||playBot||actionBot||campaignFixture||humanInputFixture||humanDisconnectFixture||humanKeyboardFixture||
-       networkJitterFixture||networkMutateFixture||networkTransitionFixture||networkMissionEndFixture||networkPauseFixture||campaignSidekickTest||
+       networkJitterFixture||networkMutateFixture||networkTransitionFixture||networkMissionEndFixture||networkPauseFixture||campaignSidekickTest||menuFixture||swapFixture||campaignHostWaitLink||campaignHostContinue||
        (!campaignMode&&!selfTest))return FALSE;
     log("FOF_PLAYER_EDITION bots and test fixtures disabled");
 #endif
