@@ -87,6 +87,8 @@ def environment(source, args, seat, digest):
             options["RESOLUTION"] = resolution
     if args.keyboard_host and seat == "host":
         options["KEYBOARD_FIXTURE"] = "1"
+    if getattr(args, "nis_gate", False):
+        options["NIS_GATE_TEST"] = "1"
     if getattr(args, "swap", False) and seat == "host":
         options["SWAP_FIXTURE"] = "1"
     if args.steam_mock and seat == "peer":
@@ -173,6 +175,10 @@ def assess_pair(logs, launcher_logs, exits, launcher_codes, args, assessor):
                 marker = r"^PAUSE ASSERT " + assertion + r"(?: |$)"
                 if len(re.findall(marker, text, re.M)) != 1:
                     errors.append(seat + ": need exactly one pause assertion " + assertion)
+    if getattr(args, "nis_gate", False):
+        agreed = [re.findall(r"^NET NIS_AGREED ready tick=(\d+)", text, re.M) for text in logs]
+        if not agreed[0] or agreed[0] != agreed[1]:
+            errors.append("cutscene gate: both seats need the same ready tick; got " + repr(agreed))
     if getattr(args, "swap", False):
         swaps = [re.findall(r"^NET CHARACTER_SWAP tick=(\d+) host_slot=(\d)", text, re.M) for text in logs]
         if len(swaps[0]) != 2 or swaps[0] != swaps[1] or [slot for _, slot in swaps[0]] != ["1", "0"]:
@@ -469,6 +475,7 @@ def arguments(argv=None):
     parser.add_argument("--mission-cycles", type=int, default=1, help="With --mission-end: 2 = mission end, back to the hub, then a second mission until --frames")
     parser.add_argument("--display-host", help="borderless[:WIDTHxHEIGHT] or window:WIDTHxHEIGHT for the host seat")
     parser.add_argument("--display-peer", help="borderless[:WIDTHxHEIGHT] or window:WIDTHxHEIGHT for the peer seat")
+    parser.add_argument("--nis-gate", action="store_true", help="Campaign: fake cutscene-loaded status (host 600, peer 900); both seats must agree on the same tick")
     parser.add_argument("--swap", action="store_true", help="Host holds the character-switch action twice; both seats must swap on the same ticks")
     parser.add_argument("--skip-cutscenes", action="store_true", help="Campaign bots skip movies the game lets players skip (faster runs)")
     parser.add_argument("--selftest", action="store_true", help="Own-code fixtures only; no preflights or launches")

@@ -53,7 +53,8 @@ the code ("Paste code") and clicks the big blue JOIN button, without opening the
 game first: their game opens, starts by itself, takes over
 the host's campaign progress and appears in the Helicarrier hub. From there the
 host walks to the mission computer and both play the missions together, each
-with their own keyboard or controller. In co-op the mouse is not used in game.
+with their own keyboard or controller. In co-op only the host can use the mouse, and
+only in menus (point and click); in missions the mouse is not used.
 
 In the Helicarrier hub the friend also has a character: the campaign's chosen
 sidekick (Prowler at the start) appears next to Spider-Man and walks with the

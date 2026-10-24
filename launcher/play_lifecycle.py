@@ -92,6 +92,12 @@ def environment(source, seat, diagnostics=True, campaign=False, deferred=False, 
             values["PROFILE"] = str(profile)
         if not auto_together:
             values["AUTO_TOGETHER"] = "0"
+        if os.environ.get("FOF_RESEARCH_MOVIE_SKIP_TEST") == "1":
+            values["MOVIE_SKIP_TEST"] = "1"
+        if os.environ.get("FOF_RESEARCH_HUB_JUMP_TEST") == "1":
+            values["HUB_JUMP_TEST"] = "1"
+        if os.environ.get("FOF_RESEARCH_NIS_GATE_TEST") == "1":
+            values["NIS_GATE_TEST"] = "1"
         if os.environ.get("FOF_RESEARCH_HUB_WALK_DPAD") == "1":
             values["HUB_WALK_DPAD"] = "1"
         if os.environ.get("FOF_RESEARCH_HOST_WAIT_LINK") == "1" and seat == "host":

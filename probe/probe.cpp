@@ -233,6 +233,11 @@ static LSTATUS WINAPI regQuery(HKEY k,LPCWSTR name,LPDWORD,LPDWORD type,LPBYTE d
     if(known&&displayMode==3){for(auto&v:values)if(v.used&&!_wcsicmp(path,v.path)&&!_wcsicmp(name,v.name))known=false;if(!displayWidth||!displayHeight)known=false;}
     if(known){if(type)*type=REG_DWORD;if(data&&*n<4){*n=4;return ERROR_MORE_DATA;}if(data)memcpy(data,&forced,4);*n=4;log("registry known setting name=%ls value=%lu",name,forced);return ERROR_SUCCESS;}
     for(auto&v:values)if(v.used&&!_wcsicmp(path,v.path)&&!_wcsicmp(name,v.name)){if(type)*type=v.type;DWORD capacity=*n;*n=v.size;if(data&&capacity<v.size)return ERROR_MORE_DATA;if(data)memcpy(data,v.data,v.size);return ERROR_SUCCESS;}
+    // FirstRunCompleted only makes the movie screen unskippable on the game's first launch (529480, read once by the
+    // movie scene at 4A02A8). Players asked for skippable movies, so real play reports it as already done.
+    if(((humanInputMode&&!humanInputFixture)||soloMode)&&!_wcsicmp(name,L"FirstRunCompleted")){
+        DWORD value=1;if(type)*type=REG_DWORD;if(data&&*n<4){*n=4;return ERROR_MORE_DATA;}if(data)memcpy(data,&value,4);*n=4;
+        log("registry FirstRunCompleted not saved yet: movies skippable from the first launch");return ERROR_SUCCESS;}
     // First launch volumes (owner request): music 50%, speech and effects 80%. The game stores attenuation steps,
     // 0 = full volume, 10 = silent (Audio page slider = 10 - value); later changes are kept in the package.
     if(((humanInputMode&&!humanInputFixture)||soloMode)&&(!_wcsicmp(name,L"VolumeMusic")||!_wcsicmp(name,L"VolumeDialogue")||!_wcsicmp(name,L"VolumeSfx"))){
@@ -751,6 +756,51 @@ static void networkFinishScript(){
     const char message[]="Paired bot frame limit completed. Transport and state logs require review.\r\n";DWORD written=0;BOOL saved=WriteFile(marker,message,sizeof(message)-1,&written,0);FlushFileBuffers(marker);CloseHandle(marker);if(!saved||written!=sizeof(message)-1){networkFailed=true;log("NET FAIL completion marker write");}
     applyNetworkActions(0,{});applyNetworkActions(1,{});return;
 }
+// Cutscene (NIS) load gate. The game asks 4E09E1 (ECX = NIS manager 6A9984) whether a loaded NIS is ready before it
+// starts one; the answer comes from each PC's own background loading, so the two games could start the same cutscene
+// on different frames (tester session 2026-10-24: divergence at the end of Tokyo 1 while meeting_blackcat loaded; host
+// on D:, joiner on C:). Each frame carries this PC's "NIS loaded" status in action 27 (reserved, never applied); during
+// lockstep the game only hears "ready" once both PCs reported it for the same tick.
+static const unsigned networkNisAction=27;
+static bool networkNisAgreed=false;
+static bool localNisLoaded(){
+    DWORD manager=readWord(0x6a9984);if(!manager)return false;bool loaded=readWord(manager+0xb244)||readWord(manager+0xb248);
+    DWORD state=readWord(manager+0xb4e4);if(state&&readWord(state+0xc)==2)loaded=false;return loaded;
+}
+// Research (COOP_PROBE_NIS_GATE_TEST=1): fake loaded status, host from tick 600, partner from tick 900.
+static bool networkNisGateTest=false;
+static bool __cdecl nisReadyAllowed(){
+    if(!(campaignMode&&networkLockstep()&&networkInSimulation&&GetCurrentThreadId()==networkSimulationThread))return true;
+    static unsigned holds=0;if(!networkNisAgreed&&localNisLoaded()&&holds++%120==0)log("NET NIS_WAIT loaded here, waiting for the partner's cutscene load tick=%u",networkTick);
+    return networkNisAgreed;
+}
+static void __declspec(naked) nisReadyEntry(){
+    __asm {
+        push ecx
+        call nisReadyAllowed
+        pop ecx
+        test al,al
+        jz not_ready
+        push esi
+        xor esi,esi
+        lea eax,[ecx+0xb24c]
+        push 0x4e09ea
+        ret
+    not_ready:
+        xor al,al
+        ret
+    }
+}
+static bool installNisGate(){
+    const BYTE expected[]={0x56,0x33,0xf6,0x8d,0x81,0x4c,0xb2,0x00,0x00};BYTE* at=(BYTE*)0x4e09e1;
+    if(memcmp(at,expected,sizeof(expected))){log("FAIL NIS ready guard");return false;}
+    DWORD old=0;if(!VirtualProtect(at,5,PAGE_EXECUTE_READWRITE,&old))return false;
+    at[0]=0xe9;*(DWORD*)(at+1)=(DWORD)(ULONG_PTR)nisReadyEntry-(0x4e09e1+5);DWORD ignored=0;VirtualProtect(at,5,old,&ignored);FlushInstructionCache(GetCurrentProcess(),at,5);
+    log("NET NIS ready gate installed");return true;
+}
+// Per-tick parts of the shared state, kept for the last 64 ticks; logged when the two games disagree, so the next
+// report shows which part differed (characters, progress, area or game mode).
+struct StateParts{unsigned tick,actors,progress,area,mode,previous,owner,rng;};static StateParts networkParts[64]={};
 // Character swap in co-op: either player holds the game's character-switch action (TAB on the keyboard) for half a
 // second and the two players trade characters. Computed from the exchanged inputs of the same tick, so both games
 // swap on the same frame; the native switch itself stays off while two people play. Kept until swapped back.
@@ -765,6 +815,8 @@ static void networkInput(){
     if(!networkReady&&!openNetworkConnection())return;
     if(networkFrameLimit&&networkTick>=networkFrameLimit&&(!networkMissionEndFixture||(campaignCycleTarget>1&&campaignCycle+1>=campaignCycleTarget))){networkFinishScript();return;}
     static coop::Actions history[32];coop::Actions local=humanInputMode?captureLocalActions():networkBotActions(networkRole==1?0:1,networkTick),remote={};
+    if(campaignMode){local[networkNisAction]=localNisLoaded()?1.0f:0.0f;
+        if(networkNisGateTest)local[networkNisAction]=networkTick>=(networkRole==1?600u:900u)?1.0f:0.0f;}
     history[networkTick%32]=local;
     verifyNativeAxes(local);if(networkFailed)return;
     static std::uint64_t states[32]={};states[networkTick%32]=networkState;std::uint64_t remoteState=0;
@@ -776,9 +828,14 @@ static void networkInput(){
             if(!gameWindow||!PostMessageW(gameWindow,WM_CLOSE,0,0)){networkFailed=true;log("NET FAIL peer stop close error=%lu",GetLastError());}return;}
         networkFailed=true;log("NET FAIL frame=%u %s",networkTick,networkWire->Error().c_str());applyNetworkActions(0,{});applyNetworkActions(1,{});return;}
     const unsigned delay=networkDelay();
-    if(networkTick>=delay&&remoteState!=states[(networkTick-delay)%32]){networkFailed=true;log("NET FAIL shared-state divergence observed_tick=%ld own=%016llx peer=%016llx",(LONG)networkTick-(LONG)delay-1,states[(networkTick-delay)%32],remoteState);return;}
+    if(networkTick>=delay&&remoteState!=states[(networkTick-delay)%32]){
+        for(unsigned back=0;back<8&&back<=networkTick;back++){const StateParts& p=networkParts[(networkTick-delay-back)%64];
+            log("NET DIVERGENCE_PARTS tick=%u actors=%08x progress=%08x area=%08x mode=%u/%u/%u rng=%08x",p.tick,p.actors,p.progress,p.area,p.mode,p.previous,p.owner,p.rng);}
+        networkFailed=true;log("NET FAIL shared-state divergence observed_tick=%ld own=%016llx peer=%016llx",(LONG)networkTick-(LONG)delay-1,states[(networkTick-delay)%32],remoteState);return;}
     coop::Actions delayed=networkTick<delay?coop::Actions{}:history[(networkTick-delay)%32];
     coop::Actions& host=networkRole==1?delayed:remote;coop::Actions& partner=networkRole==1?remote:delayed;
+    if(campaignMode){bool agreed=host[networkNisAction]>0.5f&&partner[networkNisAction]>0.5f;
+        if(agreed!=networkNisAgreed)log("NET NIS_AGREED %s tick=%u",agreed?"ready":"not ready",networkTick);networkNisAgreed=agreed;host[networkNisAction]=0;partner[networkNisAction]=0;}
     unsigned hostSlot=networkSwapSlot(host,partner);applyNetworkActions(hostSlot,host);applyNetworkActions(1-hostSlot,partner);++networkTick;
 }
 // Native constructor4E1EFB writes vtables at+0/+28, zeroes2C/30,
@@ -854,6 +911,7 @@ static void observeNetworkState(unsigned tick){
     bool areaTerminated=false;
     for(unsigned i=0;i<96;i++){BYTE c=0;if(!name||!readMemory((void*)(name+i),&c,1)){networkFailed=true;log("NET FAIL current full area path read");return;}if(!c){areaTerminated=i>0;break;}areaHash=(areaHash^c)*16777619u;}
     if(!areaTerminated){networkFailed=true;log("NET FAIL current full area path empty or unbounded");return;}
+    {StateParts& parts=networkParts[tick%64];parts={tick,worldHash,progressHash,areaHash,gameMode[0],gameMode[1],gameMode[2],readWord(0x58cf24)};}
     unsigned context[5]={progressHash,areaHash,gameMode[0],gameMode[1],gameMode[2]};bytes=(BYTE*)context;for(unsigned i=0;i<sizeof(context);i++)worldHash=(worldHash^bytes[i])*16777619u;
     if(probeDiagnostics&&tick%120==0){char hex[sizeof(progress)*2+1]={0};for(unsigned i=0;i<sizeof(progress);i++)sprintf(hex+i*2,"%02x",progress[i]);log("NET progress tick=%u fields=%08x raw=%s",tick,progressHash,hex);}
     networkState=((std::uint64_t)readWord(0x58cf24)<<32)|worldHash;
@@ -1122,9 +1180,19 @@ static void campaignExactBarrier(coop::PhaseState state){
 // Hub walking is read by the character controller outside the hub scene update,
 // so the last mutually exchanged host stick bits are re-applied after each clear.
 static unsigned campaignHubMovement=0,campaignHubMovement2=0,campaignHubPairedCalls=0;static bool campaignHubPlayer2=false;
+// Hub jump/attack (owner report 2026-10-24: no jump or attack on the keyboard in the Helicarrier): character actions
+// besides walking are re-applied like the walk. Excluded: d-pad 0..3 (walk), 4 back key, 5 Start, 11 Back, 13 character
+// switch, 16..19 walk, 20..23 camera. Action 10 is jump and also Accept: it is only applied away from the terminals,
+// where Accept keeps its mutually confirmed path.
+static const unsigned campaignHubActionMask=(1u<<6)|(1u<<7)|(1u<<8)|(1u<<9)|(1u<<12)|(1u<<14)|(1u<<15)|(1u<<24)|(1u<<25)|(1u<<26)|(1u<<27);
+static unsigned campaignHubActions=0,campaignHubActions2=0;static bool campaignHubAtTerminal=false;
+static bool campaignHostClick=false;  // host's left click in a menu, consumed as one Accept (campaignFreshChoices)
+// Research (COOP_PROBE_HUB_JUMP_TEST=1): the host bot taps jump away from the terminals; P1 height is logged.
+static bool campaignHubJumpTest=false;
 static bool campaignHubP2Position(float* xyz);
 // P1 walks with the host's exchanged stick bits; with the hub sidekick (research) P2 walks with the joiner's.
-static void campaignApplyHubMovement(){coop::Actions shared={},second={};for(unsigned i=16;i<20;i++){if(campaignHubMovement&(1u<<i))shared[i]=1;if(campaignHubPlayer2&&(campaignHubMovement2&(1u<<i)))second[i]=1;}applyNetworkActions(0,shared);applyNetworkActions(1,second);}
+static void campaignApplyHubMovement(){coop::Actions shared={},second={};for(unsigned i=16;i<20;i++){if(campaignHubMovement&(1u<<i))shared[i]=1;if(campaignHubPlayer2&&(campaignHubMovement2&(1u<<i)))second[i]=1;}
+    const unsigned allowed=campaignHubActionMask|(campaignHubAtTerminal?0u:1u<<10);for(unsigned i=0;i<28;i++){if(campaignHubActions&allowed&(1u<<i))shared[i]=1;if(campaignHubPlayer2&&(campaignHubActions2&allowed&(1u<<i)))second[i]=1;}applyNetworkActions(0,shared);applyNetworkActions(1,second);}
 static void campaignNeutralMenu(){
     // Clear native consumers without changing replay's private held-key history.
     for(unsigned slot=0;slot<2;slot++){
@@ -1265,8 +1333,15 @@ static unsigned campaignHubWalkBits(unsigned focus,unsigned calls){
 // cursor (595994/595998) that menus use for hover. Mouse input is neither exchanged nor applied
 // on the partner's PC, so a local hover moved one seat's menu row (runs 043/067: slot row 2).
 // In co-op campaign play the game sees a parked, motionless, unpressed mouse.
+// Co-op parks the mouse: a native click would confirm a menu on one PC only. The host keeps the pointer in menus
+// (owner request 2026-10-24: "make at least only host can move cursor"): hovering moves the host's menu cursor (the
+// partner's lists follow the host's row) and a left click becomes the host's Accept, which both games still confirm.
+// Missions (lockstep) and the partner keep the mouse parked.
 static void __cdecl campaignMouseUpdate(){
     ((void(__cdecl*)())0x528bc0)();if(!campaignLive())return;
+    DWORD flow=readWord(0x69e72c);bool hostMenus=networkRole==1&&!campaignFixture&&flow&&readWord(flow+8)!=128;
+    if(hostMenus){static bool wasDown=false;bool down=(*(BYTE*)0x59598c&0x80)!=0;if(down&&!wasDown)campaignHostClick=true;wasDown=down;
+        memset((void*)0x595988,0,0xc);return;}   // wheel and buttons cleared; position and movement kept
     memset((void*)0x595980,0,0x14);*(LONG*)0x59599c=0;*(LONG*)0x5959a0=0;*(LONG*)0x595994=-32000;*(LONG*)0x595998=-32000;
 }
 static bool campaignTryConnect(){
@@ -1337,11 +1412,19 @@ static bool campaignSaveSlotUsed(unsigned row){
     DWORD attributes=GetFileAttributesW(path);return attributes!=INVALID_FILE_ATTRIBUTES&&!(attributes&FILE_ATTRIBUTE_DIRECTORY);
 }
 static unsigned campaignFirstFreeSlot(){for(unsigned row=0;row<3;row++)if(!campaignSaveSlotUsed(row))return row;return 0;}
+// Menu choices count only a fresh press: a key still held from the previous screen confirmed the next one (tester
+// session 2026-10-24: Enter on New Game, held while the host waited for the partner, also confirmed the save slot).
+// A host's left click in a menu counts as one Accept press (campaignMouseUpdate).
+static unsigned campaignFreshChoices(unsigned physical){
+    static unsigned previous=0;const unsigned choice=(1u<<10)|(1u<<11);unsigned fresh=physical&~previous&choice;previous=physical;
+    if(campaignHostClick){fresh|=1u<<10;campaignHostClick=false;}
+    return (physical&~choice)|fresh;
+}
 static bool campaignMenuBegin(void* object,unsigned kind,DWORD listOffset){
     // A menu over the hub (mission list, sidekick screen, ...) must not see the walking sticks: the hub keeps applying
     // them every frame and the joiner's P2 walk moved the mission list cursor differently per seat (mismatch-367:
     // row 0 vs 2). Stop both walks while any other menu is up.
-    if(kind!=3){campaignHubMovement=0;campaignHubMovement2=0;}
+    if(kind!=3){campaignHubMovement=0;campaignHubMovement2=0;campaignHubActions=0;campaignHubActions2=0;}
     // A finished session closes its window next; no further phase exchanges.
     if(networkComplete){campaignNeutralMenu();return false;}
     if(campaignJoinPending){
@@ -1405,7 +1488,7 @@ static bool campaignMenuBegin(void* object,unsigned kind,DWORD listOffset){
             if(kind==4&&calls%240==1)log("CAMPAIGN MISSION_LIST selection=%ld available=%u calls=%u",(LONG)selection,available,calls);
             if(kind==3&&calls>=60){bits=campaignHubWalkBits(selection,calls);if(campaignHubWalkDpad)bits=(bits&~0xf0000u)|((bits>>16)&0xfu);}
         }else{
-            bits=campaignMenuBits(campaignPhysicalMenu);
+            bits=campaignFreshChoices(campaignMenuBits(campaignPhysicalMenu));
             // A person drives these menus. A choice this co-op route cannot follow (anything but New Game, a used
             // save slot, which would ask to overwrite on this PC only, an unavailable mission, Accept away from the
             // hub terminal) simply does nothing, instead of stopping both games.
@@ -1430,7 +1513,7 @@ static bool campaignMenuBegin(void* object,unsigned kind,DWORD listOffset){
     if(kind==7&&networkRole==2){
         if(campaignFixture){static unsigned want=0xffffffffu;if(want==0xffffffffu){for(unsigned r=0;r<13;r++)if(r!=selection&&campaignSidekickRowAvailable(r)){want=r;break;}log("CAMPAIGN SIDEKICK_SELECT bot target row=%u from=%u",want,selection);}
             bits=0;if(calls>=60&&calls%40==20)bits=want>=13?1u<<11:selection==want?1u<<10:selection>want?1u<<2:1u<<3;}
-        else{bits=campaignMenuBits(campaignPhysicalMenu);if(!available)bits&=~(1u<<10);}
+        else{bits=campaignFreshChoices(campaignMenuBits(campaignPhysicalMenu));if(!available)bits&=~(1u<<10);}
     }
     if(campaignLocalDrive()){
         // Alone (test bot) or catching up (joiner): accept the game's own default rows with a slow local A.
@@ -1450,7 +1533,13 @@ static bool campaignMenuBegin(void* object,unsigned kind,DWORD listOffset){
     }
     state.auxiliary[0]=bits;coop::PhaseState peer={};
     // Hub with a second character: the joiner's stick bits travel in aux4 (P2 movement); the bot joiner walks a little.
-    if(kind==3&&campaignHubPlayer2&&networkRole==2){unsigned mine=campaignFixture?((calls/90)%4==1?1u<<16:(calls/90)%4==3?1u<<17:0u):campaignWalkBits(campaignMenuBits(campaignPhysicalMenu));state.auxiliary[4]=mine;}
+    if(kind==3){campaignHubAtTerminal=selection==campaignMissionGraphHash()||selection==campaignSidekickTerminal;
+        unsigned physical=campaignFixture?0u:campaignMenuBits(campaignPhysicalMenu);if(campaignHubJumpTest&&networkRole==1&&!campaignHubAtTerminal&&calls%90<6)physical|=1u<<10;
+        const unsigned actions=physical&(campaignHubActionMask|(1u<<10));
+        if(campaignHubJumpTest&&hubPositionValid){static float lowest=1e9f,highest=-1e9f;if(hubPosition[2]<lowest)lowest=hubPosition[2];if(hubPosition[2]>highest)highest=hubPosition[2];
+            if(calls%300==0)log("CAMPAIGN HUB_JUMP_TEST role=%u p1_height_range=%.3f",networkRole,highest-lowest);}
+        if(networkRole==1){state.auxiliary[4]=actions;campaignHubActions=actions;}
+        else if(campaignHubPlayer2){unsigned mine=campaignFixture?((calls/90)%4==1?1u<<16:(calls/90)%4==3?1u<<17:0u):campaignWalkBits(physical);state.auxiliary[4]=mine|actions;campaignHubActions2=actions;}}
     if(kind==3){
         // Hub without per-frame waits (first two-PC test, 2026-10-24: ~3 fps in the hub over the internet). Each game
         // sends its update and keeps running; this player's own walk applies at once, the partner's when it arrives;
@@ -1534,7 +1623,8 @@ static bool campaignMenuBegin(void* object,unsigned kind,DWORD listOffset){
         state.auxiliary[0]=hostBits;state.flags=coop::phaseReady|coop::phaseConfirmed;peer=campaignExchange(state);
         if(!coop::CampaignPhaseEqual(state,peer))campaignReject("host menu choice was not mutually confirmed");
     }
-    if(kind==3){if(networkRole!=1)campaignHubMovement=campaignWalkBits(hostBits);++campaignHubPairedCalls;if(campaignHubPlayer2&&networkRole==1)campaignHubMovement2=campaignWalkBits(peer.auxiliary[4]);}
+    if(kind==3){if(networkRole!=1){campaignHubMovement=campaignWalkBits(hostBits);campaignHubActions=peer.auxiliary[4]&(campaignHubActionMask|(1u<<10));}++campaignHubPairedCalls;
+        if(campaignHubPlayer2&&networkRole==1){campaignHubMovement2=campaignWalkBits(peer.auxiliary[4]&0xf0000u);campaignHubActions2=peer.auxiliary[4]&(campaignHubActionMask|(1u<<10));}}
     coop::Actions shared={},second={};for(unsigned i=0;i<28;i++)if(hostBits&(1u<<i))shared[i]=1;
     if(kind==3&&campaignHubPlayer2)for(unsigned i=16;i<20;i++)if(campaignHubMovement2&(1u<<i))second[i]=1;
     applyNetworkActions(0,shared);applyNetworkActions(1,second);campaignMenuContext=scene;campaignMenuKind=kind;return true;
@@ -1966,6 +2056,7 @@ static void observePlayers(){
 // Test bots only (COOP_PROBE_SKIP_NIS=1 with the campaign bot): skip cutscenes the game itself lets the player skip,
 // exactly as Start does in NIS mode (4E25CA..4E25DF: allowed flag 69ED66, NIS player 6A9984, skip 4E134B).
 static bool campaignSkipNis=false;
+static bool campaignMovieSkipTest=false;
 static void campaignBotSkipNis(){
     if(!campaignSkipNis||!campaignFixture||readWord(0x69ed24)!=5)return;
     BYTE allowed=0;readMemory((void*)0x69ed66,&allowed,1);DWORD player=readWord(0x6a9984);
@@ -2041,6 +2132,14 @@ static void __cdecl inputUpdate(float dt){
         // its player 6A9980 is playing (+4 == 1); press it on slot 0 after the menu clear, once a second.
         if(campaignSkipNis&&campaignFixture){DWORD movie=readWord(0x6a9980);static unsigned moviePulse=0,movieSkips=0;
             if(movie&&readWord(movie+4)==1&&++moviePulse%60==0){DWORD raw=readWord(readWord(0x69e56c)+14*4);if(raw<28){*(DWORD*)(0x691170+4+raw*4)=3;log("BOT MOVIE_SKIP press=%u raw=%lu",++movieSkips,raw);}}}
+        // A player skips a movie on their own PC (owner report 2026-10-24: "the movie doesn't skip"): the menu clear above
+        // also removed this player's own Start. Each PC plays movies on its own and the one ahead waits at the next barrier,
+        // so this player's just-pressed Start (abstract 14 through the game's own mapping) goes back to the movie screen.
+        // Research: COOP_PROBE_MOVIE_SKIP_TEST=1 presses it for a test bot once a second.
+        {DWORD movie=readWord(0x6a9980),raw=readWord(readWord(0x69e56c)+14*4);static bool startWasDown=false;static unsigned testPulse=0;
+            bool down=raw<28&&campaignPhysicalMenu[raw]>0.5f;if(campaignMovieSkipTest&&movie&&readWord(movie+4)==1)down=++testPulse%60<2;
+            if((!campaignFixture||campaignMovieSkipTest)&&movie&&readWord(movie+4)==1&&raw<28&&down&&!startWasDown){*(DWORD*)(0x691170+4+raw*4)=3;log("CAMPAIGN MOVIE_SKIP by this player raw=%lu",raw);}
+            startWasDown=down;}
         static DWORD previousScene=~0u;DWORD manager=readWord(0x6a9940),nativeScene=readWord(manager+0x4e4);
         if(manager&&nativeScene!=previousScene){previousScene=nativeScene;DWORD count=readWord(manager+0x404);if(count>128)campaignReject("native scene registry count");for(DWORD i=0;i<count;i++)if(readWord(manager+8+i*8)==nativeScene){DWORD object=readWord(manager+4+i*8),table=readWord(object);log("CAMPAIGN UI_OBSERVE native_scene=%lu table=%08lx update=%08lx operation=%lu",nativeScene,table,readWord(table+0x4c),readWord(0x69eb0c));break;}}
     }
@@ -2218,6 +2317,7 @@ static bool install() {
     if(!selfTest&&humanInputMode&&(!patchKeyboardLayoutCall()||!patchVerifiedCall(0x52a770,0x525c30,(void*)guardedKeyLookup)))return false;
     if(campaignMode&&!installCampaign())return false;
     if(!selfTest&&!autoTest&&!installMainMenuAudio())return false;
+    if(campaignMode&&(networkRole||networkDeferred)&&!installNisGate())return false;
     return true;
 }
 // Research: a hardware write watch on character entry 1's memory owner (6A8808+0x58+0x20 = 6A8880) on the game
@@ -2287,6 +2387,9 @@ BOOL WINAPI DllMain(HINSTANCE h,DWORD why,LPVOID){if(why!=DLL_PROCESS_ATTACH)ret
     {wchar_t test[4]={0};menuFixture=GetEnvironmentVariableW(L"COOP_PROBE_MENU_FIXTURE",test,4)&&(!wcscmp(test,L"1")||!wcscmp(test,L"2")||!wcscmp(test,L"3"));menuContinueFixture=menuFixture&&!wcscmp(test,L"2");menuNavFixture=menuFixture&&!wcscmp(test,L"3");if(menuFixture&&(!humanInputMode||campaignFixture||networkRole))return FALSE;}
     {wchar_t sound[4]={0};if(GetEnvironmentVariableW(L"COOP_PROBE_HUB_PARTNER_SOUND",sound,4)&&!wcscmp(sound,L"0"))campaignHubPartnerSound=false;}
     {wchar_t skip[4]={0};campaignSkipNis=GetEnvironmentVariableW(L"COOP_PROBE_SKIP_NIS",skip,4)&&!wcscmp(skip,L"1");}
+    {wchar_t test[4]={0};networkNisGateTest=GetEnvironmentVariableW(L"COOP_PROBE_NIS_GATE_TEST",test,4)&&!wcscmp(test,L"1");if(networkNisGateTest&&!campaignFixture)return FALSE;}
+    {wchar_t test[4]={0};campaignHubJumpTest=GetEnvironmentVariableW(L"COOP_PROBE_HUB_JUMP_TEST",test,4)&&!wcscmp(test,L"1");if(campaignHubJumpTest&&!campaignFixture)return FALSE;}
+    {wchar_t skip[4]={0};campaignMovieSkipTest=GetEnvironmentVariableW(L"COOP_PROBE_MOVIE_SKIP_TEST",skip,4)&&!wcscmp(skip,L"1");if(campaignMovieSkipTest&&!campaignFixture)return FALSE;}
     {wchar_t spawn[8]={0};if(GetEnvironmentVariableW(L"COOP_PROBE_HUB_SPAWN",spawn,8)){wchar_t* end=0;long v=wcstol(spawn,&end,10);if(!end||*end||v<0||(v>31&&v!=99))return FALSE;campaignHubSpawnIndex=(int)v;}}
     {wchar_t profile[32768]={0};DWORD length=GetEnvironmentVariableW(L"COOP_PROBE_PROFILE",profile,32768);
         if(length){if(length>=4096||!fullpath(profile,profileRoot))return FALSE;mkdirs(profileRoot);DWORD a=GetFileAttributesW(profileRoot);if(a==INVALID_FILE_ATTRIBUTES||(a&FILE_ATTRIBUTE_REPARSE_POINT))return FALSE;}}
@@ -2322,7 +2425,7 @@ BOOL WINAPI DllMain(HINSTANCE h,DWORD why,LPVOID){if(why!=DLL_PROCESS_ATTACH)ret
     // Player edition (FOF_PLAYER_EDITION): only the retail campaign runs. Test bots, scripted scenarios and
     // fault fixtures cannot be switched on; asking for one refuses the launch instead of running it.
     if(autoTest||inputBot||playBot||actionBot||campaignFixture||humanInputFixture||humanDisconnectFixture||humanKeyboardFixture||
-       networkJitterFixture||networkMutateFixture||networkTransitionFixture||networkMissionEndFixture||networkPauseFixture||campaignSidekickTest||menuFixture||swapFixture||campaignHubWalkDpad||campaignHostWaitLink||campaignHostContinue||
+       networkJitterFixture||networkMutateFixture||networkTransitionFixture||networkMissionEndFixture||networkPauseFixture||campaignSidekickTest||menuFixture||swapFixture||networkNisGateTest||campaignMovieSkipTest||campaignHubJumpTest||campaignHubWalkDpad||campaignHostWaitLink||campaignHostContinue||
        (!campaignMode&&!selfTest))return FALSE;
     log("FOF_PLAYER_EDITION bots and test fixtures disabled");
 #endif
