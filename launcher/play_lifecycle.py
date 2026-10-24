@@ -92,6 +92,8 @@ def environment(source, seat, diagnostics=True, campaign=False, deferred=False, 
             values["PROFILE"] = str(profile)
         if not auto_together:
             values["AUTO_TOGETHER"] = "0"
+        if os.environ.get("FOF_RESEARCH_HUB_WALK_DPAD") == "1":
+            values["HUB_WALK_DPAD"] = "1"
         if os.environ.get("FOF_RESEARCH_HOST_WAIT_LINK") == "1" and seat == "host":
             values["HOST_WAIT_LINK"] = "1"
             if os.environ.get("FOF_RESEARCH_HOST_CONTINUE") == "1":

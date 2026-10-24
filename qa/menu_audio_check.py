@@ -25,6 +25,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--name", required=True)
     parser.add_argument("--seconds", type=int, default=240)
+    parser.add_argument("--settings", metavar="FILE", help="Keep the game settings in this file (COOP_PROBE_SETTINGS)")
     parser.add_argument("--nav", action="store_true", help="Log which applied action moves the main menu cursor")
     parser.add_argument("--continue-save", metavar="FILE", help="Seed this save in slot 1 and check that main-menu volumes survive Continue")
     args = parser.parse_args()
@@ -38,6 +39,8 @@ def main():
     try:
         env = {k: v for k, v in os.environ.items() if not k.upper().startswith("COOP_PROBE_")}
         env.update({"COOP_PROBE_" + k: v for k, v in PLAY.items()})
+        if args.settings:
+            env["COOP_PROBE_SETTINGS"] = str(Path(args.settings).absolute())
         if args.nav:
             env["COOP_PROBE_MENU_FIXTURE"] = "3"
         if args.continue_save:

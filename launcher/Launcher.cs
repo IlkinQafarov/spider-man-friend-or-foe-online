@@ -139,6 +139,8 @@ static class Files {
             // Play: retail New Game -> hub -> missions. The host's controls drive menus and the hub;
             // the automated connection check keeps the bounded research scenario.
             d.Remove("COOP_PROBE_AUTOTEST");d.Remove("COOP_PROBE_AREA");d["COOP_PROBE_CAMPAIGN"]="1";d["COOP_PROBE_CAMPAIGN_FIXTURE"]="0";
+            // The game's own settings (volumes, controls layout) are kept here between launches (probe saveSettings).
+            d["COOP_PROBE_SETTINGS"]=Path.Combine(Root,"profile","game-settings.dat");
         }
         return d;
     }

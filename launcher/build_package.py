@@ -72,6 +72,11 @@ Audio settings: the main menu's Options now has Audio Settings too (the same
 screen as in the hub). Its first entry, saving the game, only works once a game
 is loaded. The game runs at 60 frames per second, alone and in co-op.
 
+Controls and settings: keyboard players (no controller plugged in) start with the
+game's Laptop controls layout. You can change it in Options; the game's own
+settings (controls layout, volumes, brightness) are kept in the package's profile
+folder and come back the next time you play.
+
 If one player skips a movie or cutscene and the other watches it, the game that
 is ahead pauses at the next menu or the hub until the other one catches up.
 While it waits, a small box says "Waiting for your partner..." in the launcher's

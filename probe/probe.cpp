@@ -170,6 +170,36 @@ static DWORD WINAPI expandHook(LPCWSTR source,LPWSTR out,DWORD size){
 struct Key {wchar_t path[1024];bool used;};
 struct Value {wchar_t path[1024],name[256];DWORD type,size;BYTE data[2048];bool used;};
 static Key keys[96];static Value values[256];
+// Game settings (volumes, controls layout, ...) the game writes to its registry key are kept in the package
+// (COOP_PROBE_SETTINGS, set by the launcher for real play) so they survive the next launch; before, every launch
+// started with an empty virtual registry. The display size and language stay launcher choices and are not kept.
+static wchar_t settingsPath[4096];
+static bool settingKept(const wchar_t* name){return _wcsicmp(name,L"ResolutionX")&&_wcsicmp(name,L"ResolutionY")&&_wcsicmp(name,L"Language");}
+static void saveSettings(){
+    if(!settingsPath[0])return;{wchar_t folder[4096];lstrcpyW(folder,settingsPath);wchar_t* slash=wcsrchr(folder,L'\\');if(slash){*slash=0;CreateDirectoryW(folder,0);}}wchar_t temporary[4200];_snwprintf_s(temporary,_countof(temporary),_TRUNCATE,L"%s.tmp",settingsPath);
+    HANDLE file=CreateFileW(temporary,GENERIC_WRITE,0,0,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,0);if(file==INVALID_HANDLE_VALUE)return;
+    bool ok=true;DWORD done=0;auto put=[&](const void* data,DWORD size){if(ok&&(!WriteFile(file,data,size,&done,0)||done!=size))ok=false;};
+    const char magic[8]={'F','O','F','S','E','T','1',0};put(magic,8);
+    for(auto&v:values)if(v.used&&settingKept(v.name)){WORD pathLength=(WORD)wcslen(v.path),nameLength=(WORD)wcslen(v.name);put(&pathLength,2);put(v.path,pathLength*2);put(&nameLength,2);put(v.name,nameLength*2);put(&v.type,4);put(&v.size,4);put(v.data,v.size);}
+    CloseHandle(file);if(!ok||!MoveFileExW(temporary,settingsPath,MOVEFILE_REPLACE_EXISTING))DeleteFileW(temporary);
+}
+static void loadSettings(){
+    if(!settingsPath[0])return;HANDLE file=CreateFileW(settingsPath,GENERIC_READ,FILE_SHARE_READ,0,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,0);if(file==INVALID_HANDLE_VALUE)return;
+    static BYTE buffer[256*1024];DWORD size=0;BOOL read=ReadFile(file,buffer,sizeof(buffer),&size,0);CloseHandle(file);if(!read||size<8||memcmp(buffer,"FOFSET1",8))return;
+    DWORD at=8;unsigned loaded=0;auto take=[&](void* out,DWORD n){if(at+n>size)return false;memcpy(out,buffer+at,n);at+=n;return true;};
+    for(unsigned slot=0;slot<256&&at<size;){Value& v=values[slot];WORD pathLength=0,nameLength=0;
+        if(!take(&pathLength,2)||pathLength>=1024||!take(v.path,pathLength*2u)||!take(&nameLength,2)||nameLength>=256||!take(v.name,nameLength*2u)||!take(&v.type,4)||!take(&v.size,4)||v.size>2048||!take(v.data,v.size)){memset(&v,0,sizeof(v));break;}
+        v.path[pathLength]=0;v.name[nameLength]=0;if(!settingKept(v.name)){memset(&v,0,sizeof(v));continue;}v.used=true;++loaded;++slot;}
+    log("SETTINGS loaded=%u from the package",loaded);
+}
+// Keyboard players start with the game's Laptop controls layout (owner request): only while the player has never
+// saved a layout (ControllerMap1 missing) and no XInput controller is connected when the game reads it.
+static bool controllerConnected(){
+    HMODULE xinput=GetModuleHandleW(L"xinput1_1.dll");if(!xinput)xinput=LoadLibraryW(L"xinput1_1.dll");if(!xinput)return false;
+    auto get=(DWORD(WINAPI*)(DWORD,XINPUT_STATE*))GetProcAddress(xinput,"XInputGetState");if(!get)return false;
+    for(DWORD i=0;i<4;i++){XINPUT_STATE state={};if(get(i,&state)==ERROR_SUCCESS)return true;}return false;
+}
+
 static bool keyPath(HKEY key,wchar_t* out) {
     ULONG_PTR n=(ULONG_PTR)key;if(n>=0xcafe0100&&n<0xcafe0160){Key&k=keys[n-0xcafe0100];if(k.used){lstrcpyW(out,k.path);return true;}}
     if(key==HKEY_CURRENT_USER){lstrcpyW(out,L"HKCU");return true;}if(key==HKEY_LOCAL_MACHINE){lstrcpyW(out,L"HKLM");return true;}
@@ -189,7 +219,7 @@ static LSTATUS WINAPI regSet(HKEY k,LPCWSTR name,DWORD,DWORD type,const BYTE* da
     wchar_t path[1024];if(!keyPath(k,path)||n>2048||!name||wcslen(name)>=256||(!data&&n))return ERROR_ACCESS_DENIED;
     Value* v=0;for(auto&x:values)if(x.used&&!_wcsicmp(path,x.path)&&!_wcsicmp(name,x.name)){v=&x;break;}
     if(!v)for(auto&x:values)if(!x.used){v=&x;break;}if(!v)return ERROR_NOT_ENOUGH_MEMORY;
-    v->used=true;lstrcpyW(v->path,path);lstrcpyW(v->name,name);v->type=type;v->size=n;if(n)memcpy(v->data,data,n);log("registry set virtualized name=%ls bytes=%lu",name,n);return ERROR_SUCCESS;
+    v->used=true;lstrcpyW(v->path,path);lstrcpyW(v->name,name);v->type=type;v->size=n;if(n)memcpy(v->data,data,n);log("registry set virtualized name=%ls bytes=%lu",name,n);if(settingKept(name))saveSettings();return ERROR_SUCCESS;
 }
 static LSTATUS WINAPI regQuery(HKEY k,LPCWSTR name,LPDWORD,LPDWORD type,LPBYTE data,LPDWORD n) {
     wchar_t path[1024];if(!n||!name||!keyPath(k,path))return ERROR_ACCESS_DENIED;
@@ -199,6 +229,9 @@ static LSTATUS WINAPI regQuery(HKEY k,LPCWSTR name,LPDWORD,LPDWORD type,LPBYTE d
     if(known&&displayMode==3){for(auto&v:values)if(v.used&&!_wcsicmp(path,v.path)&&!_wcsicmp(name,v.name))known=false;if(!displayWidth||!displayHeight)known=false;}
     if(known){if(type)*type=REG_DWORD;if(data&&*n<4){*n=4;return ERROR_MORE_DATA;}if(data)memcpy(data,&forced,4);*n=4;log("registry known setting name=%ls value=%lu",name,forced);return ERROR_SUCCESS;}
     for(auto&v:values)if(v.used&&!_wcsicmp(path,v.path)&&!_wcsicmp(name,v.name)){if(type)*type=v.type;DWORD capacity=*n;*n=v.size;if(data&&capacity<v.size)return ERROR_MORE_DATA;if(data)memcpy(data,v.data,v.size);return ERROR_SUCCESS;}
+    if(!_wcsicmp(name,L"ControllerMap1")&&((humanInputMode&&!humanInputFixture)||soloMode)&&!controllerConnected()){
+        static const wchar_t laptop[]=L"Laptop";if(type)*type=REG_SZ;DWORD capacity=*n;*n=sizeof(laptop);if(data&&capacity<sizeof(laptop))return ERROR_MORE_DATA;if(data)memcpy(data,laptop,sizeof(laptop));
+        log("registry ControllerMap1 not saved yet and no controller connected: Laptop layout");return ERROR_SUCCESS;}
     log("registry query missing name=%ls",name);return ERROR_FILE_NOT_FOUND;
 }
 static LSTATUS WINAPI regQueryA(HKEY k,LPCSTR name,LPDWORD reserved,LPDWORD type,LPBYTE data,LPDWORD n){wchar_t w[256];if(!name||!MultiByteToWideChar(CP_ACP,0,name,-1,w,256))return ERROR_ACCESS_DENIED;return regQuery(k,w,reserved,type,data,n);}
@@ -1002,7 +1035,7 @@ static void campaignWaitNotice(bool show){
     static bool registered=false;HINSTANCE instance=GetModuleHandleW(0);
     if(!registered){WNDCLASSW c={};c.lpfnWndProc=campaignNoticeProc;c.hInstance=instance;c.hCursor=LoadCursorW(0,(LPCWSTR)IDC_ARROW);c.lpszClassName=L"FofCoopWaitNotice";registered=RegisterClassW(&c)!=0;if(!registered)return;
         DWORD n=GetEnvironmentVariableW(L"COOP_PROBE_WAIT_TEXT",campaignNoticeText,512);
-        if(!n||n>=512)wcscpy_s(campaignNoticeText,L"Waiting for your partner…\nThey may still be watching a cutscene. The game continues as soon as they catch up.");}
+        if(!n||n>=512)wcscpy_s(campaignNoticeText,L"Waiting for your partner\x2026\nThey may still be watching a cutscene. The game continues as soon as they catch up.");}
     RECT game={0,0,GetSystemMetrics(SM_CXSCREEN),GetSystemMetrics(SM_CYSCREEN)};if(gameWindow)GetWindowRect(gameWindow,&game);
     int width=520,height=120,x=game.left+(game.right-game.left-width)/2,y=game.top+(game.bottom-game.top)/3-height/2;
     campaignNoticeWindow=CreateWindowExW(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,L"FofCoopWaitNotice",L"Friend or Foe co-op",WS_POPUP|WS_BORDER,x,y,width,height,gameWindow,0,instance,0);
@@ -1158,6 +1191,12 @@ static bool campaignHubPlayer(float (&xyz)[3]){DWORD actor=readWord(readWord(0x6
 static bool campaignTriggerName(DWORD trigger,char (&name)[33]){memset(name,0,sizeof(name));if(readWord(trigger)!=0x575f20||!readMemory((void*)(trigger+0x80),name,32))return false;name[32]=0;
     for(unsigned i=0;name[i];i++)if(name[i]<0x20||name[i]>0x7e)return false;return name[0]!=0;}
 static bool campaignSidekickTest=false,campaignSidekickVisited=false;static unsigned campaignSidekickFocus=0;
+// Hub walking shares the stick actions 16..19, re-applied after every native input update. The keyboard's Laptop
+// layout walks with the d-pad actions 0..3 instead (run menu-settings-018 bindings: W/S/A/D and arrows on 0..3, none
+// on 16..19), so a d-pad direction counts as the matching stick direction there (0 up=16, 1 down=17, 2 left=18, 3 right=19).
+static unsigned campaignWalkBits(unsigned bits){return (bits&0xf0000u)|((bits&0xfu)<<16);}
+// Research (COOP_PROBE_HUB_WALK_DPAD=1): the hub bot walks with the d-pad actions, as a Laptop-layout keyboard does.
+static bool campaignHubWalkDpad=false;
 static unsigned campaignHubWalkBits(unsigned focus,unsigned calls){
     static unsigned phase=0,phaseStart=0,tried=0,targetStart=0,arrived=0,bestAt=0,detourUntil=0,detours=0;static int target=-1;static float start[3],axisX[2],axisY[2],best=1e9f;
     if(campaignHubWalkReset){campaignHubWalkReset=false;tried=0;target=-1;arrived=0;}
@@ -1337,7 +1376,7 @@ static bool campaignMenuBegin(void* object,unsigned kind,DWORD listOffset){
             // A fresh save can open the list on a locked row (together-391 sat on row 2): step up toward row 0.
             if(kind==4&&selection<4&&!available&&calls>=60&&calls%40==20)bits=1u<<0;
             if(kind==4&&calls%240==1)log("CAMPAIGN MISSION_LIST selection=%ld available=%u calls=%u",(LONG)selection,available,calls);
-            if(kind==3&&calls>=60)bits=campaignHubWalkBits(selection,calls);
+            if(kind==3&&calls>=60){bits=campaignHubWalkBits(selection,calls);if(campaignHubWalkDpad)bits=(bits&~0xf0000u)|((bits>>16)&0xfu);}
         }else{
             bits=campaignMenuBits(campaignPhysicalMenu);
             // A person drives these menus. A choice this co-op route cannot follow (anything but New Game, a used
@@ -1381,7 +1420,7 @@ static bool campaignMenuBegin(void* object,unsigned kind,DWORD listOffset){
     }
     state.auxiliary[0]=bits;coop::PhaseState peer={};
     // Hub with a second character: the joiner's stick bits travel in aux4 (P2 movement); the bot joiner walks a little.
-    if(kind==3&&campaignHubPlayer2&&networkRole==2){unsigned mine=campaignFixture?((calls/90)%4==1?1u<<16:(calls/90)%4==3?1u<<17:0u):campaignMenuBits(campaignPhysicalMenu)&0xf0000u;state.auxiliary[4]=mine;}
+    if(kind==3&&campaignHubPlayer2&&networkRole==2){unsigned mine=campaignFixture?((calls/90)%4==1?1u<<16:(calls/90)%4==3?1u<<17:0u):campaignWalkBits(campaignMenuBits(campaignPhysicalMenu));state.auxiliary[4]=mine;}
     peer=campaignExchange(state);
     if(state.kind!=peer.kind||state.id!=peer.id||state.content!=peer.content)campaignReject("unexpected active native menu phase");
     unsigned hostBits=networkRole==1?bits:peer.auxiliary[0];
@@ -1463,7 +1502,7 @@ static bool campaignMenuBegin(void* object,unsigned kind,DWORD listOffset){
         state.auxiliary[0]=hostBits;state.flags=coop::phaseReady|coop::phaseConfirmed;peer=campaignExchange(state);
         if(!coop::CampaignPhaseEqual(state,peer))campaignReject("host menu choice was not mutually confirmed");
     }
-    if(kind==3){campaignHubMovement=hostBits&0xf0000u;++campaignHubPairedCalls;if(campaignHubPlayer2)campaignHubMovement2=(networkRole==1?peer.auxiliary[4]:state.auxiliary[4])&0xf0000u;}
+    if(kind==3){campaignHubMovement=campaignWalkBits(hostBits);++campaignHubPairedCalls;if(campaignHubPlayer2)campaignHubMovement2=campaignWalkBits(networkRole==1?peer.auxiliary[4]:state.auxiliary[4]);}
     coop::Actions shared={},second={};for(unsigned i=0;i<28;i++)if(hostBits&(1u<<i))shared[i]=1;
     if(kind==3&&campaignHubPlayer2)for(unsigned i=16;i<20;i++)if(campaignHubMovement2&(1u<<i))second[i]=1;
     applyNetworkActions(0,shared);applyNetworkActions(1,second);campaignMenuContext=scene;campaignMenuKind=kind;return true;
@@ -1865,8 +1904,8 @@ static void campaignBotSkipNis(){
 // entry ignored, and the return to the main menu (2). Then the game is closed normally.
 // Native scene object for a scene id (registry at 6A9940+4: object, id pairs; count at +404).
 static DWORD sceneObject(DWORD id){DWORD manager=readWord(0x6a9940),count=readWord(manager+0x404);if(!manager||count>128)return 0;for(DWORD i=0;i<count;i++)if(readWord(manager+8+i*8)==id)return readWord(manager+4+i*8);return 0;}
-static void keyboardBindingsLog(){
-    static bool logged=false;DWORD keyboard=readWord(0x595570),wrapper=readWord(0x595390),count=readWord(0x5955cc),descriptors=readWord(0x5955c8);
+static void keyboardBindingsLog(bool again=false){
+    static bool logged=false;if(again)logged=false;DWORD keyboard=readWord(0x595570),wrapper=readWord(0x595390),count=readWord(0x5955cc),descriptors=readWord(0x5955c8);
     if(logged||!keyboard||!wrapper||readWord(wrapper)<28||!descriptors)return;logged=true;char line[512]="";
     for(unsigned action=0;action<28;action++){DWORD head=readWord(wrapper+0x10)+action*8,node=readWord(head+4);
         for(unsigned traversed=0;node&&node!=head&&traversed<64;traversed++,node=readWord(node+4))if(readWord(node+8)==keyboard){DWORD key=readWord(node+12);if(key<count&&key<256){char item[24];_snprintf_s(item,sizeof(item),_TRUNCATE," %u:%02lx",action,readWord(descriptors+key*0xa4));strcat_s(line,item);}}}
@@ -1884,12 +1923,12 @@ static bool menuFixtureStep(DWORD flow,ULONGLONG elapsed,DWORD forcedAddress){
     if(menuNavFixture&&step==0&&scene==2&&list){static unsigned probe=0;static const DWORD candidates[]={1,21,17,25,1,21,17};
         if(probe<7){log("MENU_FIXTURE nav before action=%lu selection=%ld",probe?candidates[probe-1]:0ul,(LONG)selection);menuNavAction=candidates[probe++];last=elapsed;return false;}
         log("MENU_FIXTURE nav final selection=%ld",(LONG)selection);step=6;if(gameWindow)PostMessageW(gameWindow,WM_CLOSE,0,0);return false;}
-    if(step==0&&scene==2&&list){if(!menuAt){menuAt=elapsed;presentsAtMenu=presentCalls;}if(selection==2){step=1;return press(10,"accept main menu Options");}nativeListSelect(list,2);last=elapsed;{char ids[512]="";DWORD count=readWord(manager+0x404);for(DWORD i=0;i<count&&i<128;i++){char item[16];_snprintf_s(item,sizeof(item),_TRUNCATE," %lu",readWord(manager+8+i*8));strcat_s(ids,item);}log("MENU_FIXTURE registry count=%lu ids:%s",count,ids);}log("MENU_FIXTURE cursor set to Options");return false;}
+    if(step==0&&scene==2&&list){if(!menuAt){menuAt=elapsed;presentsAtMenu=presentCalls;keyboardBindingsLog(true);}if(selection==2){step=1;return press(10,"accept main menu Options");}nativeListSelect(list,2);last=elapsed;{char ids[512]="";DWORD count=readWord(manager+0x404);for(DWORD i=0;i<count&&i<128;i++){char item[16];_snprintf_s(item,sizeof(item),_TRUNCATE," %lu",readWord(manager+8+i*8));strcat_s(ids,item);}log("MENU_FIXTURE registry count=%lu ids:%s",count,ids);}log("MENU_FIXTURE cursor set to Options");return false;}
     if(step==1&&scene==0x11){log("MENU_FIXTURE options selection=%lu expected=1",selection);if(selection!=1){log("MENU_FIXTURE FAIL cursor not on Audio");step=99;return false;}step=2;return press(10,"accept Audio");}
     if(step==2&&scene==0x12){if(elapsed-last<4000)return false;step=3;return press(11,"back from Audio");}
     if(step==3&&scene==0x11){if(selection!=0){nativeListSelect(list,0);last=elapsed;log("MENU_FIXTURE cursor set to Save Game");return false;}step=4;return press(10,"accept Save Game (must be ignored)");}
     if(step==4&&scene==0x11){log("MENU_FIXTURE save entry ignored scene=%lu",scene);step=5;return press(11,"back to main menu");}
-    if(step==5&&scene==2){ULONGLONG ms=elapsed-menuAt;log("MENU_FIXTURE PASS fps_at_menu=%.1f",ms?(presentCalls-presentsAtMenu)*1000.0/ms:0.0);step=6;if(!menuContinueFixture&&gameWindow)PostMessageW(gameWindow,WM_CLOSE,0,0);return false;}
+    if(step==5&&scene==2){ULONGLONG ms=elapsed-menuAt;log("MENU_FIXTURE PASS fps_at_menu=%.1f volumes=%lu/%lu/%lu layout=%lu",ms?(presentCalls-presentsAtMenu)*1000.0/ms:0.0,readWord(0x69c62c),readWord(0x69c630),readWord(0x69c634),readWord(0x69efa4));step=6;if(!menuContinueFixture&&gameWindow)PostMessageW(gameWindow,WM_CLOSE,0,0);return false;}
     if(step==4&&scene==0x27){log("MENU_FIXTURE FAIL Save Game opened from the main menu");step=99;}
     // Continue check (COOP_PROBE_MENU_FIXTURE=2, a save seeded in slot 1): volumes chosen in the main menu must survive
     // loading the save. 2/3/4 stand in for the player's slider changes (the Audio page writes them the same way).
@@ -2168,6 +2207,7 @@ BOOL WINAPI DllMain(HINSTANCE h,DWORD why,LPVOID){if(why!=DLL_PROCESS_ATTACH)ret
     {wchar_t test[4]={0};swapFixture=GetEnvironmentVariableW(L"COOP_PROBE_SWAP_FIXTURE",test,4)&&!wcscmp(test,L"1");if(swapFixture&&(!humanInputFixture||networkRole!=1))return FALSE;}
     // Research: COOP_PROBE_AUTO_TOGETHER=0 keeps the plain join-at-hub route even from the main menu (its bot tests).
     {wchar_t test[4]={0};if(GetEnvironmentVariableW(L"COOP_PROBE_AUTO_TOGETHER",test,4)&&!wcscmp(test,L"0"))campaignAutoTogetherEnabled=false;}
+    {wchar_t test[4]={0};campaignHubWalkDpad=GetEnvironmentVariableW(L"COOP_PROBE_HUB_WALK_DPAD",test,4)&&!wcscmp(test,L"1");if(campaignHubWalkDpad&&!campaignFixture)return FALSE;}
     {wchar_t test[4]={0};campaignHostContinue=GetEnvironmentVariableW(L"COOP_PROBE_HOST_CONTINUE",test,4)&&!wcscmp(test,L"1");}
     {wchar_t test[4]={0};campaignHostWaitLink=GetEnvironmentVariableW(L"COOP_PROBE_HOST_WAIT_LINK",test,4)&&!wcscmp(test,L"1");if(campaignHostWaitLink&&!campaignFixture)return FALSE;if(campaignHostContinue&&!campaignHostWaitLink)return FALSE;}
     {wchar_t test[4]={0};menuFixture=GetEnvironmentVariableW(L"COOP_PROBE_MENU_FIXTURE",test,4)&&(!wcscmp(test,L"1")||!wcscmp(test,L"2")||!wcscmp(test,L"3"));menuContinueFixture=menuFixture&&!wcscmp(test,L"2");menuNavFixture=menuFixture&&!wcscmp(test,L"3");if(menuFixture&&(!humanInputMode||campaignFixture||networkRole))return FALSE;}
@@ -2176,6 +2216,7 @@ BOOL WINAPI DllMain(HINSTANCE h,DWORD why,LPVOID){if(why!=DLL_PROCESS_ATTACH)ret
     {wchar_t spawn[8]={0};if(GetEnvironmentVariableW(L"COOP_PROBE_HUB_SPAWN",spawn,8)){wchar_t* end=0;long v=wcstol(spawn,&end,10);if(!end||*end||v<0||(v>31&&v!=99))return FALSE;campaignHubSpawnIndex=(int)v;}}
     {wchar_t profile[32768]={0};DWORD length=GetEnvironmentVariableW(L"COOP_PROBE_PROFILE",profile,32768);
         if(length){if(length>=4096||!fullpath(profile,profileRoot))return FALSE;mkdirs(profileRoot);DWORD a=GetFileAttributesW(profileRoot);if(a==INVALID_FILE_ATTRIBUTES||(a&FILE_ATTRIBUTE_REPARSE_POINT))return FALSE;}}
+    {DWORD length=GetEnvironmentVariableW(L"COOP_PROBE_SETTINGS",settingsPath,4096);if(length>=4096||selfTest)settingsPath[0]=0;if(length&&length<4096&&!selfTest)loadSettings();}
     wchar_t pauseOption[8]={0};DWORD pauseLength=GetEnvironmentVariableW(L"COOP_PROBE_PAUSE_FIXTURE",pauseOption,8);if(pauseLength){
         if(pauseLength>=8||(wcscmp(pauseOption,L"0")&&wcscmp(pauseOption,L"1")))return FALSE;
         networkPauseFixture=!wcscmp(pauseOption,L"1");if(networkPauseFixture&&(!humanInputFixture||!networkRole))return FALSE;
@@ -2207,7 +2248,7 @@ BOOL WINAPI DllMain(HINSTANCE h,DWORD why,LPVOID){if(why!=DLL_PROCESS_ATTACH)ret
     // Player edition (FOF_PLAYER_EDITION): only the retail campaign runs. Test bots, scripted scenarios and
     // fault fixtures cannot be switched on; asking for one refuses the launch instead of running it.
     if(autoTest||inputBot||playBot||actionBot||campaignFixture||humanInputFixture||humanDisconnectFixture||humanKeyboardFixture||
-       networkJitterFixture||networkMutateFixture||networkTransitionFixture||networkMissionEndFixture||networkPauseFixture||campaignSidekickTest||menuFixture||swapFixture||campaignHostWaitLink||campaignHostContinue||
+       networkJitterFixture||networkMutateFixture||networkTransitionFixture||networkMissionEndFixture||networkPauseFixture||campaignSidekickTest||menuFixture||swapFixture||campaignHubWalkDpad||campaignHostWaitLink||campaignHostContinue||
        (!campaignMode&&!selfTest))return FALSE;
     log("FOF_PLAYER_EDITION bots and test fixtures disabled");
 #endif
