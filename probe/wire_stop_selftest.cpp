@@ -46,8 +46,8 @@ void blockedLocal(){Pair p(0);Actions x={},r={};auto f=std::async(std::launch::a
 void unexpectedEof(){Pair p;p.b.Close();require(until([&]{return !p.a.Error().empty();}),"unexpected EOF accepted");std::string before=p.a.Error();require(!p.a.PeerStopped()&&!p.a.RequestStop(),"failure became normal stop");require(p.a.Error()==before,"earlier error lost");}
 void finite(){Pair p;ticks(p,40);auto a=std::async(std::launch::async,[&]{return p.a.Finish();});bool b=p.b.Finish();require(a.get()&&b,"finite FIN regression");require(!p.a.PeerStopped()&&!p.b.PeerStopped(),"FIN became STOP");require(p.a.Error().empty()&&p.b.Error().empty(),"finite error");}
 struct Hello {std::uint32_t magic,version,role,delay;Digest build,scenario;};
-struct Frame {std::uint32_t magic,tick;Actions actions;std::uint64_t state;};
-static_assert(sizeof(Hello)==80&&sizeof(Frame)==128,"raw fixture ABI");
+struct Frame {std::uint32_t magic,tick;Actions actions;std::uint64_t state;MenuPointer pointer;std::uint32_t reserved;};
+static_assert(sizeof(Hello)==80&&sizeof(Frame)==144,"raw fixture ABI");
 struct PhasePacket {std::uint32_t magic,sequence;PhaseState state;std::uint64_t reserved;};
 static_assert(sizeof(PhasePacket)==128,"raw phase ABI");
 PhaseState phase(unsigned role,unsigned sequence){
@@ -72,7 +72,7 @@ void idleThenExchange(){Pair p(3,300);Sleep(900);require(p.a.Error().empty()&&p.
 struct RawPeer {
     InputWire wire;SOCKET peer=INVALID_SOCKET;
     explicit RawPeer(unsigned timeoutMs=1500){std::uint16_t port=0;SOCKET listener=listenAt(port);Digest d={};auto f=std::async(std::launch::async,[&]{return wire.Open(false,"127.0.0.1",port,d,d,3,timeoutMs);});
-        peer=accept(listener,0,0);closesocket(listener);require(peer!=INVALID_SOCKET,"phase raw accept");Hello h={};require(bytes(peer,&h,sizeof(h),false)&&h.version==4,"phase hello receive");h.role=0;require(bytes(peer,&h,sizeof(h),true),"phase hello reply");require(f.get(),"phase raw handshake");}
+        peer=accept(listener,0,0);closesocket(listener);require(peer!=INVALID_SOCKET,"phase raw accept");Hello h={};require(bytes(peer,&h,sizeof(h),false)&&h.version==5,"phase hello receive");h.role=0;require(bytes(peer,&h,sizeof(h),true),"phase hello reply");require(f.get(),"phase raw handshake");}
     ~RawPeer(){if(peer!=INVALID_SOCKET)closesocket(peer);}
 };
 void badPhase(unsigned mutation){
@@ -98,15 +98,31 @@ void partialFrameTimeout(unsigned operation){
     RawPeer r(300);Actions actions={},remote={};PhaseState local=phase(0,0),out={};
     if(operation==1)for(unsigned i=0;i<3;i++)require(r.wire.Step(i,actions,remote),"partial Step setup");
     auto start=GetTickCount64();auto f=std::async(std::launch::async,[&]{return operation==0?r.wire.ExchangePhase(0,local,out):operation==1?r.wire.Step(3,actions,remote):r.wire.Finish();});
-    Frame received={};for(unsigned i=0;i<(operation==1?4u:1u);i++)require(bytes(r.peer,&received,sizeof(received),false),"partial fixture receive");
+    if(operation==0){PhasePacket received={};require(bytes(r.peer,&received,sizeof(received),false),"partial phase fixture receive");}
+    else {Frame received={};for(unsigned i=0;i<(operation==1?4u:1u);i++)require(bytes(r.peer,&received,sizeof(received),false),"partial fixture receive");}
     PhasePacket stalled={0x31534850,0,phase(0,0),0};require(bytes(r.peer,&stalled,16,true),"partial fixture prefix");
     require(!f.get()&&r.wire.Error().find("timed out")!=std::string::npos,"partial packet hid API timeout");r.wire.Close();
     require(GetTickCount64()-start<1200,"partial reader failed to unblock after timeout");
 }
 void malformed(std::uint32_t magic,std::uint32_t tick,bool badPayload,const char* expected){
     std::uint16_t port=0;SOCKET listener=listenAt(port);InputWire wire;Digest d={};auto opened=std::async(std::launch::async,[&]{return wire.Open(false,"127.0.0.1",port,d,d,3,1500);});
-    SOCKET peer=accept(listener,0,0);closesocket(listener);require(peer!=INVALID_SOCKET,"raw accept");Hello hello={};require(bytes(peer,&hello,sizeof(hello),false),"hello receive");require(hello.version==4,"not protocol4");hello.role=0;require(bytes(peer,&hello,sizeof(hello),true),"hello reply");require(opened.get(),"raw open");
+    SOCKET peer=accept(listener,0,0);closesocket(listener);require(peer!=INVALID_SOCKET,"raw accept");Hello hello={};require(bytes(peer,&hello,sizeof(hello),false),"hello receive");require(hello.version==5,"not protocol5");hello.role=0;require(bytes(peer,&hello,sizeof(hello),true),"hello reply");require(opened.get(),"raw open");
     Frame marker={magic,tick,{},0};if(badPayload)marker.actions[1]=.25f;require(bytes(peer,&marker,sizeof(marker),true),"bad marker send");require(until([&]{return !wire.Error().empty();}),"bad marker accepted");require(wire.Error().find(expected)!=std::string::npos,"wrong marker diagnosis");require(!wire.PeerStopped()&&!wire.RequestStop(),"malformed became normal stop");closesocket(peer);
+}
+void invalidRemotePointer(unsigned mutation){
+    RawPeer r;Frame packet={0x314d5246,3,{},0,{},0};
+    if(mutation==0)packet.pointer.x=65536;if(mutation==1)packet.pointer.y=65536;
+    if(mutation==2)packet.pointer.flags=4;if(mutation==3)packet.pointer.flags=menuPointerClick;
+    if(mutation==4)packet.pointer.x=1;if(mutation==5)packet.reserved=1;
+    if(mutation==6){packet.magic=0x31504f53;packet.tick=0;packet.pointer={1,1,menuPointerActive};}
+    if(mutation==7){packet.magic=0x314e4946;packet.tick=0;packet.pointer={1,1,menuPointerActive};}
+    require(bytes(r.peer,&packet,sizeof(packet),true),"invalid pointer fixture send");
+    require(until([&]{return !r.wire.Error().empty();}),"invalid pointer metadata accepted");
+    require(!r.wire.PeerStopped(),"invalid pointer became normal stop");
+}
+void invalidLocalPointer(){
+    const MenuPointer values[]={{65536,0,menuPointerActive},{0,65536,menuPointerActive},{0,0,4},{0,0,menuPointerClick},{1,0,0},{0,1,0}};
+    for(const auto& value:values){Pair p;Actions a={},r={};require(!p.a.Step(0,a,r,0,nullptr,&value)&&p.a.Error()=="Invalid local input sequence","invalid local pointer accepted");}
 }
 void oldProtocol(unsigned version){
     std::uint16_t port=0;SOCKET listener=listenAt(port);InputWire wire;Digest d={};auto opened=std::async(std::launch::async,[&]{return wire.Open(false,"127.0.0.1",port,d,d,3,1500);});SOCKET peer=accept(listener,0,0);closesocket(listener);Hello hello={};require(bytes(peer,&hello,sizeof(hello),false),"old hello read");hello.role=0;hello.version=version;require(bytes(peer,&hello,sizeof(hello),true),"old hello send");require(!opened.get()&&wire.Error().find("protocol mismatch")!=std::string::npos,"old protocol accepted");closesocket(peer);
@@ -138,6 +154,16 @@ int main(){
         {"partial packet bounded phase wait",[]{partialFrameTimeout(0);}},
         {"partial packet bounded Step wait",[]{partialFrameTimeout(1);}},
         {"partial packet bounded Finish wait",[]{partialFrameTimeout(2);}},
+        {"invalid local pointer bounds/flags/inactive",invalidLocalPointer},
+        {"remote pointer x overflow",[]{invalidRemotePointer(0);}},
+        {"remote pointer y overflow",[]{invalidRemotePointer(1);}},
+        {"remote pointer reserved flag",[]{invalidRemotePointer(2);}},
+        {"remote pointer click without active",[]{invalidRemotePointer(3);}},
+        {"remote inactive pointer coordinates",[]{invalidRemotePointer(4);}},
+        {"remote frame reserved field",[]{invalidRemotePointer(5);}},
+        {"STOP nonzero pointer",[]{invalidRemotePointer(6);}},
+        {"FIN nonzero pointer",[]{invalidRemotePointer(7);}},
+        {"protocol4 rejection",[]{oldProtocol(4);}},
         {"protocol2 rejection",[]{oldProtocol(2);}},{"protocol3 rejection",[]{oldProtocol(3);}}
     };
     unsigned failures=0;for(const auto& test:tests){try{test.run();printf("PASS %s\n",test.name);}catch(const std::exception& e){++failures;printf("FAIL %s: %s\n",test.name,e.what());}}

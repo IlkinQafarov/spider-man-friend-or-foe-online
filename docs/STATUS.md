@@ -1,10 +1,37 @@
 # Status and evidence
 
-Snapshot: **21 October 2026**. The project is an active research preview, with no public release binaries.
+Snapshot: **26 October 2026**. The latest player pre-release is [v1.0.1-beta](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases/tag/v1.0.1-beta). This document distinguishes earlier beta evidence, the current release changes, automated fixture evidence and user-reported play.
+
+## Published beta and later campaign evidence
+
+The beta provides the player launcher and native campaign route. According to the owner's two-PC session reports, real players completed the first Tokyo mission together over real Steam. This is **user-reported gameplay evidence**, distinct from the automated local gates below; it does not establish later missions, all hardware or arbitrary network conditions. The earlier lobby-only smoke remains historical evidence, not the limit of all subsequent Steam testing.
+
+| Check | Recorded result | Practical limit |
+| --- | --- | --- |
+| Full-campaign-488, before the beta release | **PASS:** 60,001 common frames, all 20 mission endings from Tokyo 1 to Venom, seven boss lifecycle paths and 20 matching hub-return progress checkpoints | Bots on one PC with a mock Steam relay. The research level runner shortens missions to their endings and invokes boss-defeat script paths; this is not 20 complete ordinary missions played through combat. |
+| Regional bad-network cases | Tokyo, Egypt, Island, Nepal 1–3 and Transylvania 1–2 completed their shortened mission paths with simulated delay, jitter and periodic stalls | Separate local fixtures, not one complete bad-network campaign or a WAN certification. |
+| Exact-build game repairs | Guarded repairs for the damaged Mysterio laser code and empty Transylvania 3 draw-list item were exercised before release | Applies only to the pinned executable and expected damaged instructions; no support for unrelated builds is implied. |
+| Owner's real Steam sessions | **User reported:** first Tokyo mission played together on two PCs; pressure plates and synchronization worked during play | Later missions remain bot-tested. The evening beta session also exposed the tutorial and save-slot defects below. |
+
+## v1.0.1-beta changes
+
+Current campaign source uses **scenario 12 / wire protocol 5**. Protocol 5 carries the host pointer through the synchronized input stream and rejects incompatible peers. These changes are included in v1.0.1-beta and **not included in v1.0.0-beta**; both peers need matching builds.
+
+| Change or check | Current evidence | Remaining limit |
+| --- | --- | --- |
+| Mission tutorial and host menu ownership | Native tutorial popups use mission lockstep input instead of the hub-only shared-menu path. In-mission popup/pause controls belong to the session host, including after character swaps; local movie-skip handling is retained. | The focused tutorial gates below cover one first-area popup, not every menu, pause option or physical mouse/controller combination. |
+| Tutorial-host-493 | **PASS:** native first Tokyo area; 1,801 matching common frames. Popup opened at tick 744; three peer Accept attempts were ignored at 770; transported host pointer click accepted at 870; popup closed at 883. Both owned launchers exited 0, with no errors or forced cleanup. | Same-machine English/Russian bots and mock Steam. The fixture withholds host acceptance before exercising it; no shortened level-runner route is used. |
+| Tutorial-bad-net-494 | **PASS:** 1,801 matching common frames; corresponding markers at 749 / 780 / 880 / 893. Configured 120 ms one-way delay, 40 ms jitter and 600 ms stalls every 10 seconds; elapsed 239.093 seconds. Both exits 0, no errors or forced cleanup. | Simulated bad network on one PC. This repeats the focused tutorial test, not a full mission or remote-PC regression. |
+| In-mission rejoin, rejoin-mission-492 and rejoin-bad-net-506 | **PASS:** peer left Tokyo 1 after 601 common frames; host continued alone, returned to the Helicarrier, accepted a replacement peer and both resumed Tokyo/1_Level/1_Area. Each run reached 1,801 matching new-session frames and clean exits. 506 used 120 ms one-way delay, 40 ms jitter and 600 ms stalls every 10 seconds; replacement watched its opening while host waited; elapsed 656.875 s. | Area restart through the hub, not restoration of interrupted combat. Later areas, boss arenas and a new join arriving during the host's cutscene remain unverified. This work postdates the published beta. |
+| Host save-slot selection and overwrite | **PASS:** later empty slot495 (host row2 / peer row0, 601 matching frames); native Yes502 (601 matching frames); No503 and full-peer504. Native Yes/No prompt and each local profile route were exercised. No/full required unchanged seed bytes, size and timestamps, no profile initialization or mission load, and clean exits. | Generated sandbox saves on one PC. This does not attest all native write failures, corrupted saves or shared Continue recovery. |
+| Phase-stop shutdown, phase-stop-overwrite-505 | **PASS:** host closed during the native overwrite prompt; peer recorded one deferred owned-window close and unwound normally. Both exits 0, no exception or forced cleanup, no later shared save/load operations, all seeded files unchanged. | Focused menu-phase STOP regression for the reported shutdown failure family; not a claim that every possible shutdown crash is fixed. |
+| Own-code regression checks | Progress, mode, key, campaign-phase, mission-menu policy/mutation and lifecycle fixtures passed. Wire tests include pointer round-trip and malformed/old-protocol rejection. | Synthetic evidence only; it cannot certify native save writes, every UI path or real hardware. |
+
+The beta's reported tutorial dismissal and inability to choose an occupied New Game slot are therefore separate from the unreleased fixes. The tutorial, native save-choice and focused shutdown fixes have the bounded passes above. The first overwrite test stalled because the bot used vertical controls on a horizontal Yes/No dialog; corrected native Left/Right fixture controls produced the successful gate. Failed runs remain failures. These changes are included in v1.0.1-beta.
 
 ## Historical verified checkpoints
 
-The two game gates below used **scenario version 5**. They do not certify current scenario-10 source or every later checksum change.
+The two early game gates below used **scenario version 5**. They do not certify the current working tree or every later checksum change.
 
 | Check | Observed result | Practical limit |
 | --- | --- | --- |
@@ -19,7 +46,7 @@ These summarize completed maintainer checks. Raw evidence stays private because 
 
 ## Current source and recent failures
 
-Current source is **scenario 11 / wire protocol 3**. The selected-state sample includes the full area path, campaign flags, actual mode, previous mode only while pause/NIS restoration uses it, and pause owner only while paused. Mode ranges are guarded. This broadens detection; it is not a complete world-state oracle.
+This section preserves the **historical scenario 7–11 / wire-protocol-3** investigation. Scenario 11 is not the current source version. Its selected-state sample included the full area path, campaign flags, actual mode, previous mode only while pause/NIS restoration used it, and pause owner only while paused. Those checks broadened detection without providing a complete world-state oracle. Failed runs below remain failed after later fixes.
 
 | Check | Observed result | Interpretation |
 | --- | --- | --- |
@@ -50,7 +77,7 @@ Both new runs reported actual and canonical US layout, with 102 keyboard descrip
 
 Run **036**, also scenario 11, passed the quiet fixture-disabled gameplay lifecycle: at least 361 common ticks, four sparse observations, no diagnostic game captures, host-only owned-window close, ordered peer stop and normal exits. The pre-game movie/bootstrap route was slow: readiness was still pending at 212 seconds and the gate completed at about 221 seconds within its 240-second bound. This is startup/idle/shutdown evidence, not a physical-input or retail-campaign pass. It uses the controlled research bootstrap.
 
-## Retail campaign bootstrap (scenario 12, private feature branch)
+## Historical retail campaign bootstrap (scenario 12)
 
 | Check | Observed result | Practical limit |
 | --- | --- | --- |
@@ -63,28 +90,31 @@ Run **036**, also scenario 11, passed the quiet fixture-disabled gameplay lifecy
 | Run 061 | **PASS.** Two cycles: mission, end, hub, walk to the terminal again, second mission start, 2,400 equal sampled ticks | Same limits |
 | Run 064 | **PASS.** The launcher's play path (`--play`, unlimited) on the campaign route, bot driving only host menus/hub: 361 matching frames, host-only close, ordered peer stop, normal exits | Took about 9 minutes to reach gameplay with unskipped movies |
 
-The GUI's Play mode now uses this campaign route with the host's controls driving menus and the hub. The automated connection check keeps the bounded research scenario. Only New Game and the first slot are accepted.
+At this early checkpoint, the GUI adopted the native campaign route, while the automated connection check retained the bounded research scenario. The then-current restriction to New Game and the first slot is historical; later published builds added Continue and joining/rejoining at the hub. The current overwrite change is still unverified as described above.
 
-Hub movement is not deterministic (it uses wall-clock time), so the peer's Spider-Man is snapped to the host's position there. That is acceptable in the hub, which has no enemies or progress, and is not used inside missions.
+The campaign implementation synchronizes hub position to the host because native hub movement uses local timing. This correction is scoped to the hub and is not evidence of deterministic mission movement or complete hub-state coverage.
 
 ## Implemented, with incomplete validation
 
-The code includes two-peer input exchange, native player routing, fixed gameplay timing, selected state checks, complete-pack language verification, host/join UI, an x64 native relay and ordered user-stop handling. The real-input path accepts keyboard/controller providers, but physical device usability remains untested. The packaging helper creates an explicit asset-free file set, but no release package is offered here.
+The project includes two-peer input exchange, native player routing, fixed gameplay timing, selected state checks, complete-pack language verification, the host/join UI, an x64 native relay and ordered user-stop handling. Player packages have been published. Keyboard play has user-reported two-PC evidence; physical gamepads and broad layout/focus/device compatibility remain unverified. Working-tree changes require fresh gates and a separately approved release.
 
 ## Not established
 
-* Two different PCs exchanging game traffic through Steam or across a WAN.
-* Full campaign progression, ordinary menu-driven transitions, bosses and cutscenes.
-* Persistent shared saving, resume, reconnect, late join or host migration.
+* All 20 ordinary missions played start to finish on two PCs. The later automated campaign uses shortened mission-ending fixtures.
+* One full campaign over the simulated bad network, or broad real-WAN coverage. Rare Rhino-intro and Transylvania-start mismatches remain watch items.
+* Persistent shared saving and Continue from both seats, including error handling beyond the bounded native overwrite cases above.
+* Broader in-mission rejoin beyond the first-area bad-network gate: later areas, bosses and host cutscenes; exact interrupted-world restoration or host migration.
 * A complete enemy, mission, combat, animation and progress state oracle.
-* Long sessions, broad hardware compatibility, latency tolerance or physical input focus/usability.
+* Broad hardware/gamepad compatibility, long-session reliability and all physical input focus arrangements.
 * Support for a different executable, storefront build, translation or engine family.
 
 The three area swaps are controlled fixtures. They are useful transition coverage and do not certify ordinary campaign travel. Matching sampled hashes cannot establish equality of every unobserved game field.
 
 ## Progress estimate
 
-The current estimate is **63 / 100 toward a first playable release** (2026-10-24, v0.1.6-alpha-player; was 40):
+The current estimate remains **about 85 / 100 toward the intended playable co-op experience** (26 October 2026, v1.0.1-beta). This is engineering judgement about milestones, not measured test coverage, a claim of 85% campaign completion, or a delivery forecast. The fixes above do not automatically increase it.
+
+For history, the earlier v0.1.6-alpha-player estimate was **63 / 100** on 24 October (previously 40), using this breakdown:
 
 | Workstream | Earned | Available |
 | --- | ---: | ---: |
@@ -99,4 +129,4 @@ The current estimate is **63 / 100 toward a first playable release** (2026-10-24
 
 Weights and partial credit are engineering judgement, not empirical test coverage, elapsed effort or a time forecast. “10/10” in the foundation row applies only to the pinned target and known language packs. It does not imply compatibility with all editions. Scores should change when acceptance evidence changes, including regression findings.
 
-The remaining 60 points include unresolved design and validation work. There is no supported release date. See [Roadmap](ROADMAP.md).
+The historical table is not a current scorecard. Shared saves, remaining native UI/rejoin validation, complete ordinary missions, controller coverage and regression findings still require work. See [Roadmap](ROADMAP.md); this snapshot makes no release-date commitment.

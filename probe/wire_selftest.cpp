@@ -10,6 +10,11 @@ using coop::Actions;
 static Actions sample(unsigned player,unsigned tick){
     Actions result={};result[16+player]=(float)(tick%4)/4.0f;result[10+player]=(tick%7==0)?1.0f:0.0f;return result;
 }
+static coop::MenuPointer pointerSample(unsigned player,unsigned tick){
+    if(tick%5==0)return {};
+    return {((tick+player)*1003u)%65536u,tick%2?65535u:0u,coop::menuPointerActive|(tick%3==0?coop::menuPointerClick:0u)};
+}
+static bool pointerEqual(const coop::MenuPointer& a,const coop::MenuPointer& b){return a.x==b.x&&a.y==b.y&&a.flags==b.flags;}
 static bool channelTest(){
     coop::InputWire host,client;coop::Digest build={},scenario={};build[0]=0xeb;scenario[0]=0x21;
     auto accepting=std::async(std::launch::async,[&]{return host.Open(true,"127.0.0.1",49371,build,scenario,3,3000);});
@@ -19,10 +24,12 @@ static bool channelTest(){
     auto peer=[&](unsigned player,coop::InputWire& wire){
         bool ok=true;
         for(unsigned tick=0;tick<180;tick++){
-            Actions remote={};std::uint64_t state=0,localState=((std::uint64_t)(player+1)<<32)|tick;if(!wire.Step(tick,sample(player,tick),remote,localState,&state)){ok=false;break;}
+            Actions remote={};coop::MenuPointer localPointer=pointerSample(player,tick),remotePointer={65535,65535,3};std::uint64_t state=0,localState=((std::uint64_t)(player+1)<<32)|tick;if(!wire.Step(tick,sample(player,tick),remote,localState,&state,&localPointer,&remotePointer)){ok=false;break;}
             Actions expected=tick<3?Actions{}:sample(1-player,tick-3);
             if(remote!=expected){ok=false;printf("FAIL delayed actions player=%u tick=%u\n",player,tick);break;}
             std::uint64_t expectedState=tick<3?0:((std::uint64_t)(2-player)<<32)|(tick-3);if(state!=expectedState){ok=false;printf("FAIL delayed state player=%u tick=%u\n",player,tick);break;}
+            coop::MenuPointer expectedPointer=tick<3?coop::MenuPointer{}:pointerSample(1-player,tick-3);
+            if(!pointerEqual(remotePointer,expectedPointer)){ok=false;printf("FAIL delayed pointer player=%u tick=%u\n",player,tick);break;}
             if((tick+player)%9==0)std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         if(ok)ok=wire.Finish();++finished;
@@ -32,7 +39,7 @@ static bool channelTest(){
     auto clientRun=std::async(std::launch::async,[&]{return peer(1,client);});
     bool hostOk=peer(0,host),clientOk=clientRun.get();
     if(!hostOk||!clientOk){printf("FAIL exchange host=%s client=%s\n",host.Error().c_str(),client.Error().c_str());return false;}
-    puts("PASS LOOPBACK_180_TICKS_DELAY3_AND_GRACEFUL_FINISH");return true;
+    puts("PASS LOOPBACK_180_TICKS_DELAY3_POINTER_AND_GRACEFUL_FINISH");return true;
 }
 static bool invalidInputTest(){
     coop::InputWire host,client;coop::Digest build={},scenario={};

@@ -17,12 +17,14 @@ namespace coop {
 namespace {
 constexpr std::uint32_t helloMagic=0x314f4f43,frameMagic=0x314d5246,finishMagic=0x314e4946,stopMagic=0x31504f53,phaseMagic=0x31534850;
 struct Hello {std::uint32_t magic,version,role,delay;Digest build,scenario;};
-struct Frame {std::uint32_t magic,tick;Actions actions;std::uint64_t state;};
+struct Frame {std::uint32_t magic,tick;Actions actions;std::uint64_t state;MenuPointer pointer;std::uint32_t reserved;};
 struct PhasePacket {std::uint32_t magic,sequence;PhaseState state;std::uint64_t reserved;};
 static_assert(sizeof(Hello)==80,"wire hello size");
-static_assert(sizeof(Frame)==128,"wire frame size");
+static_assert(sizeof(Frame)==144,"wire frame size");
 static_assert(sizeof(PhasePacket)==128,"wire phase packet size");
 bool valid(const Actions& actions){for(float value:actions)if(!std::isfinite(value)||value<0||value>1)return false;return true;}
+bool valid(const MenuPointer& pointer){return pointer.x<=65535&&pointer.y<=65535&&!(pointer.flags&~(menuPointerActive|menuPointerClick))&&
+    ((pointer.flags&menuPointerActive)||(pointer.x==0&&pointer.y==0&&pointer.flags==0));}
 bool valid(const PhaseState& state){return (state.kind==phaseMenu||state.kind==phaseLoad)&&!(state.flags&~(phaseReady|phaseConfirmed));}
 bool transfer(SOCKET socket,void* bytes,int count,bool sending){
     char* position=(char*)bytes;
@@ -55,8 +57,8 @@ struct InputWire::Impl {
         {std::lock_guard<std::mutex> lock(queueMutex);running=false;}
         if(socket!=INVALID_SOCKET)shutdown(socket,SD_BOTH);ready.notify_all();return false;
     }
-    bool ReceiveFrame(Frame& frame){
-        char* position=(char*)&frame;int remaining=sizeof(frame);
+    bool ReceiveBytes(void* destination,int remaining){
+        char* position=(char*)destination;
         while(remaining&&running){
             // A local Winsock shutdown need not release an already blocked recv
             // immediately. Poll readiness (no network traffic), then receive only
@@ -68,6 +70,14 @@ struct InputWire::Impl {
             position+=received;remaining-=received;
         }
         return remaining==0;
+    }
+    bool ReceiveFrame(Frame& frame){
+        // Phase packets remain 128 bytes; input/terminal packets are 144. Read
+        // the discriminator first so adjacent mixed packet types never overlap.
+        if(!ReceiveBytes(&frame.magic,sizeof(frame.magic)))return false;
+        if(frame.magic!=phaseMagic&&frame.magic!=frameMagic&&frame.magic!=stopMagic&&frame.magic!=finishMagic)return false;
+        int size=frame.magic==phaseMagic?sizeof(PhasePacket):sizeof(Frame);
+        return ReceiveBytes((char*)&frame+sizeof(frame.magic),size-sizeof(frame.magic));
     }
     void Read(){
         // The input delay may be set once before the first frame (SetDelay); read it when the first frame arrives.
@@ -84,17 +94,18 @@ struct InputWire::Impl {
             }
             if(frame.magic!=phaseMagic&&expected==~0u)expected=delay.load();
             if(frame.magic==stopMagic){
-                bool empty=frame.state==0;for(float value:frame.actions)if(value!=0)empty=false;
+                bool empty=frame.state==0&&frame.pointer.x==0&&frame.pointer.y==0&&frame.pointer.flags==0&&frame.reserved==0;for(float value:frame.actions)if(value!=0)empty=false;
                 if(frame.tick>0xffffff00u||frame.tick+delay!=expected||!empty){Fail("Invalid stop sequence or payload");break;}
                 {std::lock_guard<std::mutex> lock(queueMutex);peerStopped=true;}
                 ready.notify_all();return;
             }
             if(frame.magic==finishMagic){
-                if(frame.tick+delay!=expected){Fail("Invalid finish sequence");break;}
+                bool empty=frame.state==0&&frame.pointer.x==0&&frame.pointer.y==0&&frame.pointer.flags==0&&frame.reserved==0;for(float value:frame.actions)if(value!=0)empty=false;
+                if(frame.tick+delay!=expected||!empty){Fail("Invalid finish sequence or payload");break;}
                 {std::lock_guard<std::mutex> lock(queueMutex);peerFinished=true;}
                 ready.notify_all();return;
             }
-            if(frame.magic!=frameMagic||frame.tick!=expected||!valid(frame.actions)||frame.tick>consumed.load()+128){Fail("Invalid or out-of-order input frame");break;}
+            if(frame.magic!=frameMagic||frame.tick!=expected||!valid(frame.actions)||!valid(frame.pointer)||frame.reserved||frame.tick>consumed.load()+128){Fail("Invalid or out-of-order input frame");break;}
             framesSeen=true;{std::lock_guard<std::mutex> lock(queueMutex);queue.emplace(frame.tick,frame);}
             ++expected;ready.notify_all();
         }
@@ -142,9 +153,9 @@ bool InputWire::Open(bool host,const char* ipv4,std::uint16_t port,const Digest&
     setsockopt(impl->socket,IPPROTO_TCP,TCP_NODELAY,(char*)&noDelay,sizeof(noDelay));
     setsockopt(impl->socket,SOL_SOCKET,SO_RCVTIMEO,(char*)&timeout,sizeof(timeout));
     setsockopt(impl->socket,SOL_SOCKET,SO_SNDTIMEO,(char*)&timeout,sizeof(timeout));
-    Hello local={helloMagic,4,host?0u:1u,delay,build,scenario},peer={};
+    Hello local={helloMagic,5,host?0u:1u,delay,build,scenario},peer={};
     if(!transfer(impl->socket,&local,sizeof(local),true)||!transfer(impl->socket,&peer,sizeof(peer),false))return impl->Fail("Handshake transfer failed");
-    if(peer.magic!=helloMagic||peer.version!=4||peer.role==local.role||peer.role>1||peer.delay!=delay||peer.build!=build||peer.scenario!=scenario)return impl->Fail("Build, scenario, role, or protocol mismatch");
+    if(peer.magic!=helloMagic||peer.version!=5||peer.role==local.role||peer.role>1||peer.delay!=delay||peer.build!=build||peer.scenario!=scenario)return impl->Fail("Build, scenario, role, or protocol mismatch");
     // Movies/modal screens may produce no packets while no API is waiting.
     // API waits remain bounded and Fail/Close shuts down a stalled reader.
     DWORD idleReceive=0;if(setsockopt(impl->socket,SOL_SOCKET,SO_RCVTIMEO,(char*)&idleReceive,sizeof(idleReceive))==SOCKET_ERROR)return impl->Fail("Receive idle configuration failed");
@@ -155,23 +166,24 @@ bool InputWire::SetDelay(unsigned frames){
     if(!impl->running||frames<1||frames>16||impl->outgoing!=0||impl->framesSeen)return false;
     impl->delay=frames;return true;
 }
-bool InputWire::Step(std::uint32_t tick,const Actions& local,Actions& remote,std::uint64_t localState,std::uint64_t* remoteState){
+bool InputWire::Step(std::uint32_t tick,const Actions& local,Actions& remote,std::uint64_t localState,std::uint64_t* remoteState,const MenuPointer* localPointer,MenuPointer* remotePointer){
     std::unique_lock<std::mutex> sending(impl->sendMutex);
     if(impl->localStopped||impl->peerStopped)return false;
     if(!impl->running)return false;
     if(impl->ownFinished)return impl->Fail("Input after finish");
-    if(tick!=impl->outgoing||tick>0xffffff00u||!valid(local))return impl->Fail("Invalid local input sequence");
+    const MenuPointer pointer=localPointer?*localPointer:MenuPointer{};
+    if(tick!=impl->outgoing||tick>0xffffff00u||!valid(local)||!valid(pointer))return impl->Fail("Invalid local input sequence");
     impl->consumed=tick;
-    Frame frame={frameMagic,tick+impl->delay,local,localState};
+    Frame frame={frameMagic,tick+impl->delay,local,localState,pointer,0};
     if(!transfer(impl->socket,&frame,sizeof(frame),true)){if(impl->peerStopped)return false;return impl->Fail("Input send failed");}++impl->outgoing;
     sending.unlock();
-    if(tick<impl->delay){remote.fill(0);if(remoteState)*remoteState=0;return true;}
+    if(tick<impl->delay){remote.fill(0);if(remoteState)*remoteState=0;if(remotePointer)*remotePointer={};return true;}
     std::unique_lock<std::mutex> lock(impl->queueMutex);
     bool available=impl->ready.wait_for(lock,std::chrono::milliseconds(impl->timeoutMs),[&]{return !impl->running||impl->localStopped||impl->peerStopped||impl->queue.count(tick)!=0;});
     if(!available){lock.unlock();return impl->Fail("Input frame timed out");}
     if(!impl->running||impl->localStopped||impl->peerStopped)return false;
     auto found=impl->queue.find(tick);if(found==impl->queue.end())return false;
-    remote=found->second.actions;if(remoteState)*remoteState=found->second.state;impl->queue.erase(found);return true;
+    remote=found->second.actions;if(remoteState)*remoteState=found->second.state;if(remotePointer)*remotePointer=found->second.pointer;impl->queue.erase(found);return true;
 }
 bool InputWire::ExchangePhase(std::uint32_t sequence,const PhaseState& local,PhaseState& remote){
     std::unique_lock<std::mutex> sending(impl->sendMutex);

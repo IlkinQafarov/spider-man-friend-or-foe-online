@@ -53,8 +53,9 @@ the code ("Paste code") and clicks the big blue JOIN button, without opening the
 game first: their game opens, starts by itself, takes over
 the host's campaign progress and appears in the Helicarrier hub. From there the
 host walks to the mission computer and both play the missions together, each
-with their own keyboard or controller. In co-op only the host can use the mouse, and
-only in menus (point and click); in missions the mouse is not used.
+with their own keyboard or controller. The host can point and click in menus.
+During missions, only the host controls hints, pause and other game popups;
+the friend's menu presses and cursor are ignored on both PCs.
 
 In the Helicarrier hub the friend also has a character: the campaign's chosen
 sidekick (Prowler at the start) appears next to Spider-Man and walks with the
@@ -90,20 +91,25 @@ the host is still in the main menu (before starting a game), both games stay in
 their own main menus (each player can change Options, Audio and so on). When the
 host picks New Game, the host's game waits a moment until the friend's game is
 back in its main menu, then you both watch the opening and play on together (each
-PC uses its own first empty save slot). If the host picks Continue instead, the
+PC keeps its own saves: the host chooses a slot and confirms any overwrite;
+the friend uses their first empty slot. If the friend has no empty slots,
+New Game is canceled without replacing their saves). If the host picks Continue instead, the
 friend joins in the Helicarrier as usual. If the host is already playing when the
-friend joins, the friend joins in the Helicarrier.
+friend joins, the host returns to the Helicarrier to meet them. If the host was
+in a mission, both resume from the start of the host's area (boss arenas use
+the preceding area). This restarts that area; it does not preserve every enemy
+or the exact moment the friend disconnected.
 
 In the Helicarrier during co-op, Escape does nothing (its pause menu only offers
 dropping player 2 or quitting, which would break the session). To stop, click
 "Stop session" in the launcher or close the game. Pause in missions works for both.
 
-Tested only with bots on one PC: the host playing alone and a friend joining in
-the hub, then a mission together; New Game, hub, the first Tokyo mission and the
-return to the hub. Not established: two PCs over Steam, a host with real
-campaign progress (only fresh progress was transferred in tests), later
-missions, bosses, mission completion being recorded, real controllers and
-reconnecting.
+Testing: players reported completing the first Tokyo mission together on two
+PCs over Steam. Automated English/Russian tests on one PC checked all 20
+mission endings and seven bosses in one shortened campaign run. Most regions
+were also checked under simulated lag. These tests do not establish full
+missions played naturally across the whole campaign. Real controllers and
+shared Continue/save recovery on both PCs still need validation.
 
 ## Setup on each PC
 

@@ -4,9 +4,9 @@
 
 Two friends, two Windows game instances, and an independent English or Russian language choice on each PC. This project connects the game's native two-player controls through a synchronized input stream.
 
-**Beta · active development.** Player builds are on the [Releases](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases) page (the newest is v1.0.0-beta; expect some bugs). No game files or Steam libraries are distributed here: you need your own copy of the game. The launcher's play mode uses the native campaign route; the bounded Tokyo scenario remains for automated connection checks.
+**Beta · active development.** Player builds are on the [Releases](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases) page (the newest is v1.0.1-beta; expect some bugs). No game files or Steam libraries are distributed here: you need your own copy of the game. The launcher's play mode uses the native campaign route; the bounded Tokyo scenario remains for automated connection checks.
 
-## Current state (2026-10-25, v1.0.0-beta)
+## Current state (2026-10-26, v1.0.1-beta)
 
 The campaign route runs end to end in automated tests: New Game or Continue on the host, the Helicarrier hub, the mission computer, missions and the return to the hub. A test runner that shortens each mission to its ending played **the whole campaign, all 20 missions, in one co-op run** (60,000 frames, Tokyo 1 to the final Venom fight), with all seven bosses (Doc Ock, Green Goblin, Sandman, Scorpion, Rhino, Mysterio, Venom); level exits, boss intro cutscenes, results screens and the recorded progress were identical on both games after every mission. Most regions were also checked over a simulated bad connection (240 ms round trip, jitter, a 600 ms freeze every 10 s). Two crashes that are in the game's own code are repaired at start-up by the add-on, only when the exact broken bytes are present: Mysterio's laser (its code was overwritten by an old no-CD loader stub in this Game.exe build) and an empty draw-list entry in Transylvania 3.
 
@@ -18,9 +18,13 @@ The campaign route runs end to end in automated tests: New Game or Continue on t
 
 All of this was checked with bots on one PC with a mock Steam relay. Players have finished the first Tokyo mission together on two PCs over real Steam; the later missions so far only ran with bots (shortened to their endings). Real controllers and shared saves remain untested.
 
+## Changes in v1.0.1-beta
+
+The working tree uses wire protocol 5 to exchange the host's in-mission cursor alongside delayed inputs. A first-area English/Russian regression now checks the actual tutorial hint: the friend's attempts are ignored and the host's click closes the hint on both games at the same tick. This release includes the revised save-slot handling, normal session close and mission rejoin. See [Status](docs/STATUS.md) for verified results and remaining checks. Both players must use the same protocol version.
+
 ## What has been demonstrated
 
-Current **scenario 11 / wire protocol 3** passed two English/Russian gates: **7,200 ticks with three fixture-driven area transitions**, and **3,600 ticks with native pause/resume**. Both used keyboard/controller fixtures, jitter and a mock Steam relay. All consecutive selected-state samples matched; games, launchers and relays exited 0 without timeout or forced cleanup. Each relay sent/received 921,808 bytes in the transition gate and 461,008 in the pause gate, with zero discarded bytes. These remain bounded same-machine tests.
+Historical **scenario 11 / wire protocol 3** passed two English/Russian gates: **7,200 ticks with three fixture-driven area transitions**, and **3,600 ticks with native pause/resume**. Both used keyboard/controller fixtures, jitter and a mock Steam relay. All consecutive selected-state samples matched; games, launchers and relays exited 0 without timeout or forced cleanup. Each relay sent/received 921,808 bytes in the transition gate and 461,008 in the pause gate, with zero discarded bytes. These remain bounded same-machine tests.
 
 On **scenario version 5**, two separate English/Russian game processes completed a bounded **7,200-tick** automated gate with keyboard/controller input fixtures, injected timing jitter, a mock Steam relay and **three fixture-driven area swaps**. Selected state checks matched, all owned game/launcher/relay processes exited normally, and each relay sent and received 921,808 bytes with zero discarded bytes. This is historical evidence for that scenario, not a pass for the current source.
 
@@ -34,7 +38,7 @@ Earlier **run 033** failed on both clients during native startup, before gamepla
 
 ## How far along?
 
-**About 85 / 100 toward a first playable release** (updated 2026-10-25, v1.0.0-beta). This is an engineering judgement about milestones, not a measured coverage percentage or a delivery date.
+**About 85 / 100 toward a first playable release** (updated 2026-10-26, v1.0.1-beta). This is an engineering judgement about milestones, not a measured coverage percentage or a delivery date.
 
 What works in automated tests (bots, one PC, mock Steam relay):
 

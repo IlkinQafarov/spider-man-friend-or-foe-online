@@ -1,6 +1,6 @@
 # Building the research source
 
-This is a developer build for one pinned Windows executable, not a supported install guide for a playable release. No compiler, Steam library or game is downloaded by the build scripts.
+These are developer build instructions for one pinned Windows executable. For packaged player builds, use the Releases link in the repository README. No compiler, Steam library or game is downloaded by the build scripts.
 
 ## Prerequisites
 
@@ -42,7 +42,7 @@ The engine's exact identity is unverified. Addresses and hooks are specific to t
 
 Use your own game files. The launcher can import a verified complete English or Russian pack into a **new** `test/english/` or `test/russian/` destination; it refuses to replace an existing destination or write the source folder. The content manifest contains hashes and relative names, not game bytes. Reparse points, unknown runtime files and incoherent language mixtures are rejected. Verify the copy before any game gate; see [Testing](TESTING.md).
 
-Opening the GUI or verifying files does not start account transport. Clicking Host/Join or explicitly invoking `--steam-live` does. The native relay requires an externally supplied, supported x64 Steam API DLL and its exact hash; this repository does not supply or redistribute that library. Live gameplay delivery remains unverified.
+Opening the GUI or verifying files does not start account transport. Clicking Host/Join or explicitly invoking `--steam-live` does. The native relay requires an externally supplied, supported x64 Steam API DLL and its exact hash; this repository does not supply or redistribute that library. See [Status](STATUS.md) for the owner-reported first-mission Steam play and the limits of automated local testing.
 
 ## Packaging remains a developer operation
 
@@ -50,7 +50,7 @@ Opening the GUI or verifying files does not start account transport. Clicking Ho
 python -I launcher/build_package.py --selftest
 ```
 
-The builder has an explicit `--build <new-package-name>` mode. It copies only allowlisted own runtime outputs, the content manifest and instructions; existing output names are refused. Do not turn a successful package build into a playable-release claim. No release binaries are published with this research preview.
+The builder has an explicit `--build <new-package-name>` mode. It copies only allowlisted own runtime outputs, the content manifest and instructions; existing output names are refused. Do not turn a successful package build into a playable-release claim. Player builds are published separately; creating a local package does not update or publish a GitHub release.
 
 Continue with [Testing](TESTING.md) before attempting a game run.
 

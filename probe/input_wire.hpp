@@ -7,6 +7,11 @@
 namespace coop {
 using Actions = std::array<float,28>;
 using Digest = std::array<std::uint8_t,32>;
+constexpr std::uint32_t menuPointerActive=1,menuPointerClick=2;
+// Client-area coordinates normalized to 0..65535. Inactive samples are all zero;
+// click is meaningful only with active. Transport delays this alongside actions.
+struct MenuPointer {std::uint32_t x,y,flags;};
+static_assert(sizeof(MenuPointer)==12,"menu pointer size");
 constexpr std::uint32_t phaseMenu=1,phaseLoad=2,phaseReady=1,phaseConfirmed=2;
 // Fixed-size menu/load metadata. Digests, IDs, selection and auxiliary values are
 // opaque: the game layer must compare their meaning before acting on a choice.
@@ -33,7 +38,8 @@ public:
     // the same value before either sends its first frame (agree it in a phase exchange first).
     bool SetDelay(unsigned frames);
     bool Step(std::uint32_t tick,const Actions& local,Actions& remote,
-              std::uint64_t localState=0,std::uint64_t* remoteState=nullptr);
+              std::uint64_t localState=0,std::uint64_t* remoteState=nullptr,
+              const MenuPointer* localPointer=nullptr,MenuPointer* remotePointer=nullptr);
     // Sequence starts at zero independently of gameplay ticks. Returns the peer
     // state; it does not certify matching identities or compatible selections.
     bool ExchangePhase(std::uint32_t sequence,const PhaseState& local,PhaseState& remote);
