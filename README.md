@@ -4,11 +4,11 @@
 
 Two friends, two Windows game instances, and an independent English or Russian language choice on each PC. This project connects the game's native two-player controls through a synchronized input stream.
 
-**Alpha · active development.** Test builds are on the [Releases](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases) page (marked alpha; expect bugs). No game files or Steam libraries are distributed here: you need your own copy of the game. The launcher's play mode uses the native campaign route; the bounded Tokyo scenario remains for automated connection checks.
+**Beta · active development.** Player builds are on the [Releases](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases) page (the newest is v1.0.0-beta; expect some bugs). No game files or Steam libraries are distributed here: you need your own copy of the game. The launcher's play mode uses the native campaign route; the bounded Tokyo scenario remains for automated connection checks.
 
-## Current state (2026-10-25, v0.1.11-alpha-player)
+## Current state (2026-10-25, v1.0.0-beta)
 
-The campaign route runs end to end in automated tests: New Game or Continue on the host, the Helicarrier hub, the mission computer, missions and the return to the hub. A test runner that shortens each mission to its ending played **17 of the 20 campaign missions** in sync, in all five regions, including the Doc Ock, Green Goblin, Sandman, Scorpion and Rhino fights (level exits, boss intro cutscenes, results screen and recorded progress identical on both games), also over a simulated bad connection (240 ms round trip, jitter, a 600 ms freeze every 10 s). Nepal 4 (Mysterio) and Transylvania 3 crash on both games at the same place and are under investigation; Transylvania 4 (Venom) has not been reached.
+The campaign route runs end to end in automated tests: New Game or Continue on the host, the Helicarrier hub, the mission computer, missions and the return to the hub. A test runner that shortens each mission to its ending played **the whole campaign, all 20 missions, in one co-op run** (60,000 frames, Tokyo 1 to the final Venom fight), with all seven bosses (Doc Ock, Green Goblin, Sandman, Scorpion, Rhino, Mysterio, Venom); level exits, boss intro cutscenes, results screens and the recorded progress were identical on both games after every mission. Most regions were also checked over a simulated bad connection (240 ms round trip, jitter, a 600 ms freeze every 10 s). Two crashes that are in the game's own code are repaired at start-up by the add-on, only when the exact broken bytes are present: Mysterio's laser (its code was overwritten by an old no-CD loader stub in this Game.exe build) and an empty draw-list entry in Transylvania 3.
 
 - **Launcher:** two big buttons, HOST and JOIN, in 11 languages. HOST opens the host's game and the lobby; the friend pastes the code and clicks JOIN, and their game opens and connects by itself. Import ("Locate game install") links the game files instead of copying them.
 - **Two ways in, chosen automatically:** if the friend joins while the host is still in the main menu, both start together and watch the opening (the host picks New Game). If the host picks Continue or is already playing, the friend's game catches up and appears next to the host in the Helicarrier. A friend who leaves can rejoin there.
@@ -34,19 +34,18 @@ Earlier **run 033** failed on both clients during native startup, before gamepla
 
 ## How far along?
 
-**About 72 / 100 toward a first playable release** (updated 2026-10-25, v0.1.11-alpha-player). This is an engineering judgement about milestones, not a measured coverage percentage or a delivery date.
+**About 85 / 100 toward a first playable release** (updated 2026-10-25, v1.0.0-beta). This is an engineering judgement about milestones, not a measured coverage percentage or a delivery date.
 
 What works in automated tests (bots, one PC, mock Steam relay):
 
 - The campaign route end to end: New Game or Continue, the Helicarrier, the mission computer, missions and the return to the Helicarrier.
-- 17 of 20 missions shortened to their endings, all five regions and five bosses, in sync, also over a simulated bad connection.
+- The whole campaign (20 missions, 7 bosses) shortened to each mission's ending, in sync in one run; most regions also over a simulated bad connection.
 - Starting together from the main menu (both watch the opening) or joining the host in the Helicarrier; a friend who leaves can rejoin.
 - Picking the friend's sidekick, swapping characters with TAB, native pause, cutscenes skipped at different times.
-- A player launcher in 11 languages with HOST / JOIN, published as alpha releases; game settings are kept between launches.
+- A player launcher in 11 languages with HOST / JOIN, published as alpha and beta releases; game settings are kept between launches.
 
 What is still missing before a first playable release:
 
-- Nepal 4 (Mysterio) and Transylvania 3 crash on both games; Transylvania 4 (Venom) not reached yet.
 - Whole missions played start to finish by real players on two PCs (so far: the first Tokyo mission).
 - Saving the shared campaign from both sides, real controllers, and reconnecting in the middle of a mission.
 

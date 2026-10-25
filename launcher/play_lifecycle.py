@@ -98,6 +98,8 @@ def environment(source, seat, diagnostics=True, campaign=False, deferred=False, 
             values["HUB_JUMP_TEST"] = "1"
         if os.environ.get("FOF_RESEARCH_LEVEL_END_TEST") == "1":
             values["LEVEL_END_TEST"] = "1"
+            if os.environ.get("FOF_RESEARCH_LEVEL_END_BOSS_WAIT"):
+                values["LEVEL_END_BOSS_WAIT"] = os.environ["FOF_RESEARCH_LEVEL_END_BOSS_WAIT"]
             if os.environ.get("FOF_RESEARCH_LEVEL_END_DONE"):
                 values["LEVEL_END_DONE"] = os.environ["FOF_RESEARCH_LEVEL_END_DONE"]
         if os.environ.get("FOF_RESEARCH_NIS_GATE_TEST") == "1":

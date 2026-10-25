@@ -618,7 +618,10 @@ static DWORD __cdecl randomObserved(DWORD* state,DWORD limit,DWORD caller,DWORD 
     // Particle systems (class at 575434, e.g. effects/sandstorm: timer 4D14D8, spawn 4D1262) advance with the frame's
     // real time outside the lockstep tick; they are visual only and get the per-PC ambient generator too
     // (egypt2-bad-net-472: a sandstorm emitter drew from the shared generator one tick apart on the two PCs).
-    bool ambient=networkLockstep()&&networkAmbientSplit&&state==(DWORD*)0x58cf24&&(outerCaller==0x49115a||outerCaller==0x49233f||(outerCaller>=0x4d1262&&outerCaller<0x4d1a00));
+    // Draw-list items (4D266A -> 4D26E5: random angle/size of a decal mark, the list of the Transylvania 3 fix) too
+    // (full-campaign-487 diverged in Nepal 3 on these draws).
+    bool ambient=networkLockstep()&&networkAmbientSplit&&state==(DWORD*)0x58cf24&&(outerCaller==0x49115a||outerCaller==0x49233f||(outerCaller>=0x4d1262&&outerCaller<0x4d1a00)||
+        caller==0x4d26f5||outerCaller==0x4d2707||outerCaller==0x4d2718);
     if(ambient)state=&networkAmbientRng;
     bool tracked=networkLockstep()&&networkReady&&!networkFailed&&!networkComplete&&(state==(DWORD*)0x58cf24||(networkInSimulation&&GetCurrentThreadId()==networkSimulationThread));
     DWORD old=tracked&&limit?*state:0,result=0;
@@ -987,6 +990,151 @@ static void __declspec(naked) nisReadyEntry(){
         ret
     }
 }
+// Game fix: Mysterio's laser (ability type 0x15 "Laser", class table 562CC0). In this Game.exe a no-CD crack's
+// loader stub (string "...\sd46nocd.dll", call to the Windows XP address 7C801D77) overwrote 487318..4873E3: the end of
+// the laser's deactivate (vtable +18, 4872B6) and the start of its init (487379, called from 483BB0). The first
+// laser of the Nepal 4 boss fight crashed both PCs at 48739F (write into read-only code). Both pieces are rebuilt here
+// from the surviving code and from the sister classes (init 480E11/48526A, deactivate 48B48E), only when the exact
+// broken bytes are present.
+//   init(obj, owner, def, spawn) stdcall: base init 48C61C(obj, owner, 0), class counter 69EA40, def at +78,
+//   active +4, start position spawn+0 -> +18, end time +90 = def+1C (def+20 is the time after a hit, 4871EB),
+//   firing +94; then the original code from 4873E4 (ebx obj, eax def, ecx spawn, edi 0, 12-byte frame).
+static volatile LONG laserInits=0,laserDeactivates=0;
+static void __declspec(naked) laserInit(){
+    __asm {
+        lock inc dword ptr [laserInits]
+        push ebp
+        mov ebp,esp
+        sub esp,0Ch
+        inc dword ptr ds:[0x69ea40]
+        push ebx
+        mov ebx,dword ptr [ebp+8]
+        push esi
+        push edi
+        push 0
+        push dword ptr [ebp+0Ch]
+        push ebx
+        mov eax,0x48c61c
+        call eax
+        mov eax,dword ptr [ebp+10h]
+        mov dword ptr [ebx+78h],eax
+        mov byte ptr [ebx+4],1
+        mov esi,dword ptr [ebp+14h]
+        lea edi,[ebx+18h]
+        movsd
+        movsd
+        movsd
+        mov eax,dword ptr [ebp+10h]
+        fld dword ptr [eax+1Ch]
+        fstp dword ptr [ebx+90h]
+        mov byte ptr [ebx+94h],1
+        mov ecx,dword ptr [ebp+14h]
+        xor edi,edi
+        push 0x4873e4
+        ret
+    }
+}
+//   deactivate (thiscall): the surviving start (effects 49065E, counter, 4B64E1, owner callback B8(obj, B0), +88,
+//   physics flags, velocity zeroed), then the pool return used by every 48CE8A-type object (pool [6A992C]+40 for
+//   type 0x15, active list +0C/+10 linked through obj+60, free list +14/+18, count +4) and the base deactivate 48C6DE.
+static void __declspec(naked) laserDeactivate(){
+    __asm {
+        lock inc dword ptr [laserDeactivates]
+        push esi
+        mov esi,ecx
+        push edi
+        lea edi,[esi+4Ch]
+        mov eax,0x49065e
+        call eax
+        dec dword ptr ds:[0x69ea40]
+        push esi
+        mov eax,0x4b64e1
+        call eax
+        pop ecx
+        mov eax,dword ptr [esi+0B8h]
+        test eax,eax
+        je no_callback
+        push dword ptr [esi+0B0h]
+        push esi
+        call eax
+        pop ecx
+        pop ecx
+    no_callback:
+        and dword ptr [esi+88h],0
+        mov eax,dword ptr [esi+74h]
+        mov eax,dword ptr [eax+4]
+        or dword ptr [eax+18h],4
+        mov eax,dword ptr [esi+74h]
+        mov eax,dword ptr [eax+8]
+        and dword ptr [eax+34h],0FFFFFFF7h
+        mov eax,dword ptr [esi+74h]
+        mov eax,dword ptr [eax+4]
+        xorps xmm0,xmm0
+        movss dword ptr [eax+0F8h],xmm0
+        movss dword ptr [eax+0FCh],xmm0
+        movss dword ptr [eax+100h],xmm0
+        mov eax,dword ptr ds:[0x6a992c]
+        mov edi,dword ptr [eax+40h]
+        cmp dword ptr [edi+4],0
+        jbe pool_done
+        push esi
+        lea eax,[edi+0Ch]
+        mov ecx,0x4817a9
+        call ecx
+        lea eax,[edi+18h]
+        cmp dword ptr [edi+14h],0
+        jne free_linked
+        mov dword ptr [eax],esi
+    free_linked:
+        mov eax,dword ptr [edi+14h]
+        mov dword ptr [esi+60h],eax
+        mov dword ptr [edi+14h],esi
+        dec dword ptr [edi+4]
+    pool_done:
+        mov eax,esi
+        pop edi
+        pop esi
+        mov ecx,0x48c6de
+        jmp ecx
+    }
+}
+static bool installLaserFix(){
+    const BYTE stub[]={0xe8,0x00,0x00,0x00,0x00,0x58,0xc6,0x40,0x8f,0xfe},tail[]={0xc6,0x83,0x99,0x00,0x00,0x00,0x00},start[]={0x56,0x8b,0xf1,0x57,0x8d,0x7e,0x4c};
+    if(memcmp((void*)0x487399,stub,sizeof(stub))||memcmp((void*)0x4873e4,tail,sizeof(tail))||memcmp((void*)0x4872b6,start,sizeof(start))){log("GAME_FIX laser: Game.exe does not have the broken laser code, nothing patched");return true;}
+    for(DWORD at:{0x487379u,0x4872b6u}){DWORD old=0;if(!VirtualProtect((void*)at,5,PAGE_EXECUTE_READWRITE,&old))return false;
+        *(BYTE*)at=0xe9;*(DWORD*)(at+1)=(DWORD)(ULONG_PTR)(at==0x487379u?(void*)laserInit:(void*)laserDeactivate)-(at+5);DWORD ignored=0;VirtualProtect((void*)at,5,old,&ignored);FlushInstructionCache(GetCurrentProcess(),(void*)at,5);}
+    log("GAME_FIX laser init 487379 and deactivate 4872B6 rebuilt (no-CD stub damage)");return true;
+}
+// Game fix: Transylvania 3 crashed both PCs while its first frame was drawn, at 4D33B4 (4D324D, called from the render
+// method 4D6632 with the list [esi+90]): an item of that list (next at +2C) whose object at +28 is still empty gets its
+// visible flag (+42) written. The visibility test 43BE95 already ran; empty items are now skipped in that loop
+// (the later drawing loop 4D2B97 reads only the item's own fields).
+static void __declspec(naked) drawListGuard(){
+    __asm {
+        mov ecx,eax
+        mov eax,dword ptr [ebp+8]
+        mov eax,dword ptr [eax+28h]
+        test eax,eax
+        jz item_empty
+        test ecx,ecx
+        jne item_visible
+        push 0x4d33b4
+        ret
+    item_visible:
+        push 0x4d33b9
+        ret
+    item_empty:
+        push 0x4d33c3
+        ret
+    }
+}
+static bool installDrawListFix(){
+    const BYTE expected[]={0x85,0xc0,0x8b,0x45,0x08,0x8b,0x40,0x28,0x75,0x05};BYTE* at=(BYTE*)0x4d33aa;
+    if(memcmp(at,expected,sizeof(expected))){log("GAME_FIX draw list: unexpected bytes at 4D33AA, nothing patched");return true;}
+    DWORD old=0;if(!VirtualProtect(at,5,PAGE_EXECUTE_READWRITE,&old))return false;
+    at[0]=0xe9;*(DWORD*)(at+1)=(DWORD)(ULONG_PTR)drawListGuard-(0x4d33aa+5);DWORD ignored=0;VirtualProtect(at,5,old,&ignored);FlushInstructionCache(GetCurrentProcess(),at,5);
+    log("GAME_FIX draw list 4D33AA skips items without an object");return true;
+}
 static bool installNisGate(){
     const BYTE expected[]={0x56,0x33,0xf6,0x8d,0x81,0x4c,0xb2,0x00,0x00};BYTE* at=(BYTE*)0x4e09e1;
     if(memcmp(at,expected,sizeof(expected))){log("FAIL NIS ready guard");return false;}
@@ -1175,7 +1323,7 @@ static void transitionFixture(unsigned tick){
 // (campaignBeforeLoad swaps the requested descriptor 5836CC -> 583660), then, inside the lockstep simulation on both
 // seats at the same tick, the party is put into the area's LevelEnd trigger and its enter callback runs, so the real
 // end script plays (Black Cat meeting NIS, results) and the game returns to the hub like after a played level.
-static unsigned levelEndDone=0;static bool levelEndTest=false,levelEndEntered=false;static unsigned levelEndAreaTick=0;static DWORD levelEndArea=0;
+static unsigned levelEndDone=0;static bool levelEndTest=false,levelEndEntered=false;static unsigned levelEndAreaTick=0,levelEndBossWait=1200;static DWORD levelEndArea=0;
 // Mission start area -> where the runner starts it, and that mission's last area (analysis/native/campaign-areas.json
 // forward chains). Boss missions start in the area before the boss arena (a direct start in the arena crashes the
 // retail game at 45CE49 on both seats) and walk into it through the real forward exit.
@@ -1217,7 +1365,7 @@ static void levelEndFixture(unsigned tick){
         bool end=!_strnicmp(name,"Meeting",7)||strstr(name,"Transformation")!=0;for(unsigned j=0;name[j];j++)if(!_strnicmp(name+j,"LevelEnd",8))end=true;if(!end)continue;
         DWORD enter=readWord(readWord(trigger)+0x24);if(enter<0x401000||enter>=0x555000){log("LEVEL_END trigger %s has no enter callback",name);continue;}
         enterTrigger(trigger,enter,name);levelEndDone|=1u<<(unsigned)(level-levelEndAreas);return;}
-    if(level->boss&&tick>=levelEndAreaTick+1200){
+    if(level->boss&&tick>=levelEndAreaTick+levelEndBossWait){
         // Boss arena: run the area script's own BossBattleDefeated function (records the win, then ends the mission),
         // through the same name-hash event call the game uses for OnEnter_Start (40DF49 hash, 40BA8C call).
         DWORD world=readWord(areas+4+readWord(areas+0x14)*4),script=world?readWord(world+0x88):0;if(!script){log("LEVEL_END boss arena has no script");levelEndEntered=true;return;}
@@ -1230,7 +1378,7 @@ static void levelEndFixture(unsigned tick){
             call eax
             pop esi
         }
-        levelEndEntered=true;levelEndDone|=1u<<(unsigned)(level-levelEndAreas);log("LEVEL_END ENTERED BossBattleDefeated tick=%u area=%08lx script=%08lx",tick,current,script);return;}
+        levelEndEntered=true;levelEndDone|=1u<<(unsigned)(level-levelEndAreas);log("LEVEL_END ENTERED BossBattleDefeated tick=%u area=%08lx script=%08lx lasers_started=%ld lasers_ended=%ld",tick,current,script,laserInits,laserDeactivates);return;}
     if((tick-levelEndAreaTick)%600==0)log("LEVEL_END no LevelEnd trigger yet tick=%u",tick);
 }
 // Test-only: call the retail mission-end routine (native131 body 4E323C, the same
@@ -2611,6 +2759,7 @@ static bool install() {
     }
     if(!selfTest){void** table=(void**)0x5772a0;if(table[2]!=(void*)0x4d9065||!patchComSlot(table,2,(void*)flowNative,(void**)&originalFlowNative)){log("FAIL flow dispatcher guard");return false;}}
     if(!selfTest&&!patchVerifiedCall(0x4dbab1,0x401b6f,(void*)inputUpdate))return false;
+    if(!selfTest&&(!installLaserFix()||!installDrawListFix()))return false;
     if(!selfTest&&(networkRole||networkDeferred)){void** slot=(void**)0x577e20;if(slot[0]!=(void*)0x4dbc39||!patchComSlot(slot,0,(void*)simulation,(void**)&originalSimulation)){log("FAIL simulation callback guard");return false;}}
     if(!selfTest&&(networkRole||networkDeferred))for(DWORD address:rngCallSites)if(!patchVerifiedCall(address,0x4318f5,(void*)randomEntry))return false;
     if(!selfTest&&humanKeyboardFixture&&!patchVerifiedCall(0x525c00,0x526240,(void*)keyboardPollFixture))return false;
@@ -2688,7 +2837,7 @@ BOOL WINAPI DllMain(HINSTANCE h,DWORD why,LPVOID){if(why!=DLL_PROCESS_ATTACH)ret
     {wchar_t test[4]={0};menuFixture=GetEnvironmentVariableW(L"COOP_PROBE_MENU_FIXTURE",test,4)&&(!wcscmp(test,L"1")||!wcscmp(test,L"2")||!wcscmp(test,L"3"));menuContinueFixture=menuFixture&&!wcscmp(test,L"2");menuNavFixture=menuFixture&&!wcscmp(test,L"3");if(menuFixture&&(!humanInputMode||campaignFixture||networkRole))return FALSE;}
     {wchar_t sound[4]={0};if(GetEnvironmentVariableW(L"COOP_PROBE_HUB_PARTNER_SOUND",sound,4)&&!wcscmp(sound,L"0"))campaignHubPartnerSound=false;}
     {wchar_t skip[4]={0};campaignSkipNis=GetEnvironmentVariableW(L"COOP_PROBE_SKIP_NIS",skip,4)&&!wcscmp(skip,L"1");}
-    {wchar_t test[4]={0};levelEndTest=GetEnvironmentVariableW(L"COOP_PROBE_LEVEL_END_TEST",test,4)&&!wcscmp(test,L"1");{wchar_t mask[16]={0};if(levelEndTest&&GetEnvironmentVariableW(L"COOP_PROBE_LEVEL_END_DONE",mask,16))levelEndDone=wcstoul(mask,0,16);}if(levelEndTest&&!campaignFixture)return FALSE;}
+    {wchar_t test[4]={0};levelEndTest=GetEnvironmentVariableW(L"COOP_PROBE_LEVEL_END_TEST",test,4)&&!wcscmp(test,L"1");{wchar_t mask[16]={0};if(levelEndTest&&GetEnvironmentVariableW(L"COOP_PROBE_LEVEL_END_DONE",mask,16))levelEndDone=wcstoul(mask,0,16);if(levelEndTest&&GetEnvironmentVariableW(L"COOP_PROBE_LEVEL_END_BOSS_WAIT",mask,16))levelEndBossWait=wcstoul(mask,0,10);}if(levelEndTest&&!campaignFixture)return FALSE;}
     {wchar_t test[4]={0};networkNisGateTest=GetEnvironmentVariableW(L"COOP_PROBE_NIS_GATE_TEST",test,4)&&!wcscmp(test,L"1");if(networkNisGateTest&&!campaignFixture)return FALSE;}
     {wchar_t test[4]={0};campaignHubJumpTest=GetEnvironmentVariableW(L"COOP_PROBE_HUB_JUMP_TEST",test,4)&&!wcscmp(test,L"1");if(campaignHubJumpTest&&!campaignFixture)return FALSE;}
     {wchar_t skip[4]={0};campaignMovieSkipTest=GetEnvironmentVariableW(L"COOP_PROBE_MOVIE_SKIP_TEST",skip,4)&&!wcscmp(skip,L"1");if(campaignMovieSkipTest&&!campaignFixture)return FALSE;}
