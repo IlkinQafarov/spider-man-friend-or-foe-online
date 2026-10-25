@@ -358,6 +358,10 @@ static HRESULT WINAPI present(IDirect3DDevice9*p,const RECT*a,const RECT*b,HWND 
     static ULONGLONG started=0;static unsigned lastCapture=0;
     ULONGLONG now=GetTickCount64();if(!started)started=now;unsigned seconds=(unsigned)((now-started)/1000);
     unsigned n=++presentCalls;
+    // Frame rate every 10 s with the game's flow (16 menus/hub, 128 missions): tells smooth from stuttering in real
+    // sessions and in the fake-internet tests.
+    {static ULONGLONG windowStart=0;static unsigned windowFrames=0;ULONGLONG tick=GetTickCount64();if(!windowStart)windowStart=tick;++windowFrames;
+        if(tick-windowStart>=10000){DWORD flow=*(volatile DWORD*)0x69e72c,current=0;if(flow&&!IsBadReadPtr((void*)(flow+8),4))current=*(volatile DWORD*)(flow+8);log("D3D FPS last_10s=%.1f flow=%lu",windowFrames*1000.0/(tick-windowStart),current);windowStart=tick;windowFrames=0;}}
     // Research: screenshots shortly after a requested moment (frame numbers 300000+offset).
     if(campaignCaptureAt){LONG offset=(LONG)n-campaignCaptureAt;if(offset==30||offset==90||offset==180||offset==300)capture(p,300000+campaignCaptureTag*1000+offset);if(offset>300)campaignCaptureAt=0;}if(n==1||n%6000==0){log("D3D Present count=%u elapsed_s=%u",n,seconds);if(!selfTest)log("read-only state rng=%08lx sim_mode=%lu fixed_sim_fps=%g",*(volatile DWORD*)0x58cf24,*(volatile DWORD*)0x69ed24,*(volatile float*)0x591df8);}
     if(n==120)capture(p,n);if(seconds>=5&&seconds/5>lastCapture){lastCapture=seconds/5;capture(p,200000+seconds);}
@@ -551,6 +555,8 @@ static coop::Actions physicalFixtureActions(bool analog){
         // Retail New Game shows tutorial hints as native pause mode 1 with a single OK.
         // Host-only accept pulse; lockstep input delivers it to both seats on the same tick.
         DWORD mode[3]={};if(captureGameMode(mode)&&mode[0]==1){if(networkRole==1&&networkTick%60<2)actions[10]=1.0f;return actions;}
+        // Results screen after a level end (scene 8, endlevel.fen): the host bot accepts it like a player (level-end-443 sat there).
+        if(readWord(readWord(0x6a9940)+0x4e4)==8){if(networkRole==1&&networkTick%60<2)actions[10]=1.0f;return actions;}
         unsigned direction=((networkTick/120+networkRole)%2)?18:19;actions[direction]=0.65f;return actions;}
     if(swapFixture&&networkRole==1&&((networkTick>=600&&networkTick<650)||(networkTick>=1500&&networkTick<1550))){coop::Actions actions={};actions[networkSwapAction]=1.0f;return actions;}
     // Inject before native binding/filtering, so the native-axis oracle still
@@ -609,7 +615,10 @@ static coop::Actions captureLocalActions(){
     return actions;
 }
 static DWORD __cdecl randomObserved(DWORD* state,DWORD limit,DWORD caller,DWORD outerCaller){
-    bool ambient=networkLockstep()&&networkAmbientSplit&&state==(DWORD*)0x58cf24&&(outerCaller==0x49115a||outerCaller==0x49233f);
+    // Particle systems (class at 575434, e.g. effects/sandstorm: timer 4D14D8, spawn 4D1262) advance with the frame's
+    // real time outside the lockstep tick; they are visual only and get the per-PC ambient generator too
+    // (egypt2-bad-net-472: a sandstorm emitter drew from the shared generator one tick apart on the two PCs).
+    bool ambient=networkLockstep()&&networkAmbientSplit&&state==(DWORD*)0x58cf24&&(outerCaller==0x49115a||outerCaller==0x49233f||(outerCaller>=0x4d1262&&outerCaller<0x4d1a00));
     if(ambient)state=&networkAmbientRng;
     bool tracked=networkLockstep()&&networkReady&&!networkFailed&&!networkComplete&&(state==(DWORD*)0x58cf24||(networkInSimulation&&GetCurrentThreadId()==networkSimulationThread));
     DWORD old=tracked&&limit?*state:0,result=0;
@@ -623,7 +632,7 @@ static DWORD __cdecl randomObserved(DWORD* state,DWORD limit,DWORD caller,DWORD 
         mov result,eax
         pop edi
     }
-    if(probeDiagnostics&&tracked&&InterlockedIncrement(&networkRngCalls)<=12000){DWORD actor=readWord(0x69e9f8),header=readWord(actor+8),serial=header?readWord(header+8):~0u;log("NET RNG call=%ld tick=%u simulation=%u thread=%lu caller=%08lx outer=%08lx bound=%lu old=%08lx new=%08lx result=%lu common=%u actor=%lu state=%p",networkRngCalls,networkTick,networkInSimulation&&GetCurrentThreadId()==networkSimulationThread,GetCurrentThreadId(),caller,outerCaller,limit,old,limit?*state:0,result,state==(DWORD*)0x58cf24,serial,state);}
+    if(probeDiagnostics&&tracked&&InterlockedIncrement(&networkRngCalls)<=120000){DWORD actor=readWord(0x69e9f8),header=readWord(actor+8),serial=header?readWord(header+8):~0u;log("NET RNG call=%ld tick=%u simulation=%u thread=%lu caller=%08lx outer=%08lx bound=%lu old=%08lx new=%08lx result=%lu common=%u actor=%lu state=%p",networkRngCalls,networkTick,networkInSimulation&&GetCurrentThreadId()==networkSimulationThread,GetCurrentThreadId(),caller,outerCaller,limit,old,limit?*state:0,result,state==(DWORD*)0x58cf24,serial,state);}
     return result;
 }
 static void __declspec(naked) randomEntry(){
@@ -708,7 +717,16 @@ static WaitStats phaseWaits={"phase",0,0,0},frameWaits={"frame",0,0,0};
 static double milliseconds(){static LARGE_INTEGER frequency={};if(!frequency.QuadPart)QueryPerformanceFrequency(&frequency);LARGE_INTEGER now;QueryPerformanceCounter(&now);return now.QuadPart*1000.0/frequency.QuadPart;}
 // Input delay in frames. The research scenario keeps 3 (its fixtures expect it); the campaign uses 6 (100 ms), so
 // an internet round trip does not stall every frame (first two-PC test, 2026-10-24). Both seats must agree (hello).
-static unsigned networkDelay(){return campaignMode?6u:3u;}
+static unsigned networkAgreedDelay=0;   // set before the first mission from the measured connection (0 = default)
+static unsigned networkDelay(){return networkAgreedDelay?networkAgreedDelay:(campaignMode?6u:3u);}
+// Round-trip samples (ms) from the non-blocking hub rounds.
+static float hubRoundSamples[256];static unsigned hubRoundCount=0;
+static unsigned measuredDelayFrames(){
+    if(hubRoundCount<8)return 6;unsigned n=hubRoundCount<256?hubRoundCount:256;float sorted[256];memcpy(sorted,hubRoundSamples,n*sizeof(float));std::sort(sorted,sorted+n);
+    // A hub round lasts about one round trip (each side answers when the other's update arrives): half of it each way.
+    float p50=sorted[n/2],p90=sorted[(n*9)/10];unsigned frames=(unsigned)ceilf(p90/2.0f/16.67f)+2;frames=frames<6?6:frames>14?14:frames;
+    log("NET HUB_ROUNDS samples=%u p50_ms=%.0f p90_ms=%.0f delay_frames=%u",n,p50,p90,frames);return frames;
+}
 static bool openNetworkConnection(){
     if(networkReady)return true;
     {
@@ -744,7 +762,7 @@ static bool campaignPartnerLost(const char* why){
     if(!campaignJoined||networkRole!=1)return false;
     log("NET PARTNER_LOST %s; host continues alone and can Host again",why);
     networkWire->Close();networkReady=networkFailed=networkComplete=false;networkRole=0;networkDeferred=true;networkTick=0;networkInputClock=false;
-    campaignJoinPending=campaignJoinSent=campaignJoinReceived=campaignJoined=false;campaignMission=campaignGameplay=false;campaignAutoTogether=campaignTogetherOffered=campaignTogetherDecided=campaignTogetherJoinerStart=false;
+    campaignJoinPending=campaignJoinSent=campaignJoinReceived=campaignJoined=false;campaignMission=campaignGameplay=false;campaignAutoTogether=campaignTogetherOffered=campaignTogetherDecided=campaignTogetherJoinerStart=false;networkAgreedDelay=0;hubRoundCount=0;
     campaignPhaseSequence=0;campaignLoadSequence=0;campaignCycle=0;campaignHubPartnerReset();networkSwapped=networkSwapLatched=false;networkSwapHeld=0;applyNetworkActions(0,{});applyNetworkActions(1,{});return true;
 }
 static void networkFinishScript(){
@@ -763,6 +781,184 @@ static void networkFinishScript(){
 // lockstep the game only hears "ready" once both PCs reported it for the same tick.
 static const unsigned networkNisAction=27;
 static bool networkNisAgreed=false;
+// The agreed status lags by the input delay. Between cutscenes it reads "ready", so with a long delay and a fast load a
+// PC could see the old "ready" after its own load began and start alone (level-chain-bad-net-470, delay 11: the Green
+// Goblin intro began on one PC only). A PC starts a cutscene only once the agreed status has shown "not ready" after
+// its own load began; both PCs then start on the tick the agreed status turns ready again.
+static unsigned nisLocalLoadStart=0,nisAgreedNotReadyAt=0;
+// Action 27 carries this PC's load status bits: 4 = cutscene loaded, 2 = level exit unlocked, 1 = next area loaded,
+// 8 = an area change is waiting here (see areaChangeRun), 16 = the cutscene stream is done here (see streamDoneDecision).
+static float readyBits(bool nis,bool unlocked,bool loaded,bool change,bool stop){return (nis?0.5f:0.0f)+(unlocked?0.25f:0.0f)+(loaded?0.125f:0.0f)+(change?0.0625f:0.0f)+(stop?0.03125f:0.0f);}
+static unsigned readyBitsOf(float value){unsigned bits=(unsigned)(value*32.0f+0.5f);if(bits>31)return 0;
+    return (bits&16?4u:0u)|(bits&8?2u:0u)|(bits&4?1u:0u)|(bits&2?8u:0u)|(bits&1?16u:0u);}
+// Level exits (4D2301 at 4D23FD): the exit-unlocked script flag and the streamed next area finish at different
+// moments on two PCs, so in co-op both games take the exit only from the agreed status of both.
+static unsigned networkExitAgreed=0;
+static bool localExitUnlocked(){DWORD script=readWord(0x69ed1c);return script&&(readWord(script+0x24)&6)==4;}
+static bool localNextAreaLoaded(){DWORD areas=readWord(0x6a9974);if(!areas)return false;DWORD slot=readWord(areas+0x14);return readWord(areas+(slot==0?1:0)*4+4)!=0||readWord(0x69eda4)!=0;}
+static unsigned __cdecl exitDecision(){   // 0 native, 1 exit still locked, 2 wait for the next area, 3 go
+    if(!(campaignMode&&networkLockstep()&&networkInSimulation&&GetCurrentThreadId()==networkSimulationThread))return 0;
+    {static unsigned calls=0;static unsigned last=~0u;if(last!=networkTick&&calls++<200){last=networkTick;log("NET EXIT_TRIGGER tick=%u agreed=%u local_unlocked=%d local_loaded=%d",networkTick,networkExitAgreed,localExitUnlocked(),localNextAreaLoaded());}}
+    if(!(networkExitAgreed&2))return 1;if(!(networkExitAgreed&1)){static unsigned holds=0;if(holds++%120==0)log("NET EXIT_WAIT waiting for both games to load the next area tick=%u",networkTick);return 2;}
+    return 3;
+}
+static void __declspec(naked) exitGateEntry(){
+    __asm {
+        call exitDecision
+        cmp eax,1
+        je exit_locked
+        cmp eax,2
+        je exit_wait
+        cmp eax,3
+        je exit_go
+        mov eax,dword ptr ds:[0x69ed1c]
+        mov eax,dword ptr [eax+0x24]
+        push 0x4d2405
+        ret
+    exit_locked:
+        push 0x4d240b
+        ret
+    exit_wait:
+        push 0x4d2445
+        ret
+    exit_go:
+        push 0x4d2435
+        ret
+    }
+}
+// Area changes (4E2C13, transition stage 2) are requested by level scripts that run outside the lockstep tick, so two
+// PCs ask on different frames. In co-op the request is held, announced with bit 8 of action 27, and both games run
+// it inside the simulation on the tick where both announcements have arrived.
+static DWORD areaChangePending=0,areaChangeCaller=0;static bool areaChangeRunning=false,networkAreaChangeAgreed=false;static unsigned areaChangeQuietUntil=0;
+static bool __cdecl nextAreaAllowed(DWORD caller,DWORD kind){
+    if(areaChangeRunning)return true;
+    if(!(campaignMode&&networkLockstep()&&networkReady&&!networkFailed&&!networkComplete))return true;
+    DWORD flow=readWord(0x69e72c);if(!flow||readWord(flow+8)!=128)return true;
+    if(!areaChangePending){areaChangePending=kind?kind:~0u;areaChangeCaller=caller;log("NET AREA_CHANGE requested tick=%u kind=%lu caller=%08lx in_sim=%d",networkTick,kind,caller,networkInSimulation);}
+    return false;
+}
+// Cutscene end (4E12D4 on the NIS manager 6A9984): a cutscene counts as finished only when its stream object
+// (+B4E4, state +C 0 or 8) is done playing, which happens in real time on each PC (level-chain-457: the Green Goblin
+// intro ended at tick 8227 on one PC and 8229 on the other). Holding the stop itself crashed both games (458), so in
+// mission gameplay the simulation reads the agreed "stream done" of both PCs instead (bit 16 of action 27).
+static bool networkStreamDoneAgreed=true;
+static bool localStreamDone(){DWORD manager=readWord(0x6a9984);if(!manager)return true;DWORD stream=readWord(manager+0xb4e4);if(!stream)return true;DWORD state=readWord(stream+0xc);return state==0||state==8;}
+static DWORD __cdecl streamDoneDecision(){   // 0 native, 1 done, 2 not done
+    if(!(campaignMode&&networkLockstep()&&networkReady&&!networkFailed&&!networkComplete&&networkInSimulation&&GetCurrentThreadId()==networkSimulationThread))return 0;
+    DWORD flow=readWord(0x69e72c);if(!flow||readWord(flow+8)!=128)return 0;
+    bool local=localStreamDone();static bool lastLocal=true,lastAgreed=true;
+    if(local!=lastLocal||networkStreamDoneAgreed!=lastAgreed){lastLocal=local;lastAgreed=networkStreamDoneAgreed;log("NET STREAM_DONE tick=%u here=%d agreed=%d",networkTick,local,networkStreamDoneAgreed);}
+    return networkStreamDoneAgreed?1:2;
+}
+static void __declspec(naked) streamDoneEntry(){
+    __asm {
+        push ecx
+        push edx
+        push eax
+        call streamDoneDecision
+        mov edx,eax
+        pop eax
+        cmp edx,1
+        je stream_done
+        cmp edx,2
+        je stream_busy
+        pop edx
+        pop ecx
+        mov eax,dword ptr [eax+0xb4e4]
+        push 0x4e12da
+        ret
+    stream_done:
+        pop edx
+        pop ecx
+        mov eax,1
+        ret
+    stream_busy:
+        pop edx
+        pop ecx
+        xor eax,eax
+        ret
+    }
+}
+static void areaChangeRun(unsigned tick){
+    if(!areaChangePending||!networkAreaChangeAgreed||tick<areaChangeQuietUntil)return;
+    if(!(networkExitAgreed&1)){static unsigned holds=0;if(holds++%120==0)log("NET EXIT_WAIT area change waits for both games to load the next area tick=%u",tick);return;}
+    DWORD kind=areaChangePending==~0u?0:areaChangePending;areaChangePending=0;areaChangeQuietUntil=tick+40;areaChangeRunning=true;
+    __asm{
+        push esi
+        push edi
+        push kind
+        mov eax,dword ptr ds:[0x6a9988]
+        mov ecx,0x4e2c13
+        call ecx
+        pop edi
+        pop esi
+    }
+    areaChangeRunning=false;log("NET AREA_CHANGE run tick=%u kind=%lu caller=%08lx stage=%lu",tick,kind,areaChangeCaller,readWord(readWord(0x6a9988)+0x2c));
+}
+static void __declspec(naked) nextAreaEntry(){
+    __asm {
+        push eax
+        push dword ptr [esp+8]
+        push dword ptr [esp+8]
+        call nextAreaAllowed
+        add esp,8
+        test al,al
+        pop eax
+        jz next_wait
+        push esi
+        push edi
+        mov edi,dword ptr ds:[0x6a9974]
+        push 0x4e2c1b
+        ret
+    next_wait:
+        ret 4
+    }
+}
+// Diagnostics: every change of the transition manager stage (4E207A), with caller and whether it ran inside the tick.
+static void __cdecl stageObserved(DWORD manager,DWORD caller,DWORD stage){
+    static unsigned lines=0;DWORD current=readWord(manager+0x2c);if(current==stage||lines>=400)return;lines++;
+    log("NET STAGE_SET tick=%u %lu->%lu caller=%08lx in_sim=%d",networkTick,current,stage,caller,networkInSimulation&&GetCurrentThreadId()==networkSimulationThread);
+}
+static void __declspec(naked) stageEntry(){
+    __asm {
+        pushad
+        push dword ptr [esp+36]
+        push dword ptr [esp+36]
+        push ecx
+        call stageObserved
+        add esp,12
+        popad
+        push ebp
+        mov ebp,esp
+        and esp,0xfffffff8
+        push 0x4e2080
+        ret
+    }
+}
+static bool installStageLog(){
+    const BYTE expected[]={0x55,0x8b,0xec,0x83,0xe4,0xf8};BYTE* at=(BYTE*)0x4e207a;
+    if(memcmp(at,expected,sizeof(expected))){log("FAIL stage guard");return false;}
+    DWORD old=0;if(!VirtualProtect(at,5,PAGE_EXECUTE_READWRITE,&old))return false;
+    at[0]=0xe9;*(DWORD*)(at+1)=(DWORD)(ULONG_PTR)stageEntry-(0x4e207a+5);DWORD ignored=0;VirtualProtect(at,5,old,&ignored);FlushInstructionCache(GetCurrentProcess(),at,5);return true;
+}
+static bool installNisStopGate(){
+    const BYTE expected[]={0x8b,0x80,0xe4,0xb4,0x00,0x00,0x85,0xc0};BYTE* at=(BYTE*)0x4e12d4;
+    if(memcmp(at,expected,sizeof(expected))){log("FAIL NIS stream-done guard");return false;}
+    DWORD old=0;if(!VirtualProtect(at,5,PAGE_EXECUTE_READWRITE,&old))return false;
+    at[0]=0xe9;*(DWORD*)(at+1)=(DWORD)(ULONG_PTR)streamDoneEntry-(0x4e12d4+5);DWORD ignored=0;VirtualProtect(at,5,old,&ignored);FlushInstructionCache(GetCurrentProcess(),at,5);
+    log("NET NIS stream-done gate installed");return true;
+}
+static bool installExitGate(){
+    {const BYTE expected[]={0x56,0x57,0x8b,0x3d,0x74,0x99,0x6a,0x00};BYTE* at=(BYTE*)0x4e2c13;
+    if(memcmp(at,expected,sizeof(expected))){log("FAIL next area guard");return false;}
+    DWORD old=0;if(!VirtualProtect(at,5,PAGE_EXECUTE_READWRITE,&old))return false;
+    at[0]=0xe9;*(DWORD*)(at+1)=(DWORD)(ULONG_PTR)nextAreaEntry-(0x4e2c13+5);DWORD ignored=0;VirtualProtect(at,5,old,&ignored);FlushInstructionCache(GetCurrentProcess(),at,5);}
+    const BYTE expected[]={0xa1,0x1c,0xed,0x69,0x00,0x8b,0x40,0x24};BYTE* at=(BYTE*)0x4d23fd;
+    if(memcmp(at,expected,sizeof(expected))){log("FAIL level exit guard");return false;}
+    DWORD old=0;if(!VirtualProtect(at,5,PAGE_EXECUTE_READWRITE,&old))return false;
+    at[0]=0xe9;*(DWORD*)(at+1)=(DWORD)(ULONG_PTR)exitGateEntry-(0x4d23fd+5);DWORD ignored=0;VirtualProtect(at,5,old,&ignored);FlushInstructionCache(GetCurrentProcess(),at,5);
+    log("NET level exit gate installed");return true;
+}
 static bool localNisLoaded(){
     DWORD manager=readWord(0x6a9984);if(!manager)return false;bool loaded=readWord(manager+0xb244)||readWord(manager+0xb248);
     DWORD state=readWord(manager+0xb4e4);if(state&&readWord(state+0xc)==2)loaded=false;return loaded;
@@ -772,7 +968,7 @@ static bool networkNisGateTest=false;
 static bool __cdecl nisReadyAllowed(){
     if(!(campaignMode&&networkLockstep()&&networkInSimulation&&GetCurrentThreadId()==networkSimulationThread))return true;
     static unsigned holds=0;if(!networkNisAgreed&&localNisLoaded()&&holds++%120==0)log("NET NIS_WAIT loaded here, waiting for the partner's cutscene load tick=%u",networkTick);
-    return networkNisAgreed;
+    return networkNisAgreed&&(!nisLocalLoadStart||nisAgreedNotReadyAt>=nisLocalLoadStart+networkDelay());   // own "not ready" sample has arrived
 }
 static void __declspec(naked) nisReadyEntry(){
     __asm {
@@ -815,8 +1011,11 @@ static void networkInput(){
     if(!networkReady&&!openNetworkConnection())return;
     if(networkFrameLimit&&networkTick>=networkFrameLimit&&(!networkMissionEndFixture||(campaignCycleTarget>1&&campaignCycle+1>=campaignCycleTarget))){networkFinishScript();return;}
     static coop::Actions history[32];coop::Actions local=humanInputMode?captureLocalActions():networkBotActions(networkRole==1?0:1,networkTick),remote={};
-    if(campaignMode){local[networkNisAction]=localNisLoaded()?1.0f:0.0f;
-        if(networkNisGateTest)local[networkNisAction]=networkTick>=(networkRole==1?600u:900u)?1.0f:0.0f;}
+    // Campaign test bots in real-input runs: the host accepts the results screen after a level end (scene 8), as a player would.
+    if(campaignFixture&&humanInputMode&&!humanInputFixture&&networkRole==1&&readWord(readWord(0x6a9940)+0x4e4)==8&&networkTick%60<2)local[10]=1.0f;
+    if(campaignMode){bool nis=localNisLoaded();if(networkNisGateTest)nis=networkTick>=(networkRole==1?600u:900u);
+        {static bool lastNis=true;if(lastNis&&!nis)nisLocalLoadStart=networkTick;lastNis=nis;}
+        local[networkNisAction]=readyBits(nis,localExitUnlocked(),localNextAreaLoaded(),areaChangePending!=0,localStreamDone());}
     history[networkTick%32]=local;
     verifyNativeAxes(local);if(networkFailed)return;
     static std::uint64_t states[32]={};states[networkTick%32]=networkState;std::uint64_t remoteState=0;
@@ -834,8 +1033,10 @@ static void networkInput(){
         networkFailed=true;log("NET FAIL shared-state divergence observed_tick=%ld own=%016llx peer=%016llx",(LONG)networkTick-(LONG)delay-1,states[(networkTick-delay)%32],remoteState);return;}
     coop::Actions delayed=networkTick<delay?coop::Actions{}:history[(networkTick-delay)%32];
     coop::Actions& host=networkRole==1?delayed:remote;coop::Actions& partner=networkRole==1?remote:delayed;
-    if(campaignMode){bool agreed=host[networkNisAction]>0.5f&&partner[networkNisAction]>0.5f;
-        if(agreed!=networkNisAgreed)log("NET NIS_AGREED %s tick=%u",agreed?"ready":"not ready",networkTick);networkNisAgreed=agreed;host[networkNisAction]=0;partner[networkNisAction]=0;}
+    if(campaignMode){unsigned both=readyBitsOf(host[networkNisAction])&readyBitsOf(partner[networkNisAction]);bool agreed=(both&4)!=0;if(!agreed)nisAgreedNotReadyAt=networkTick;
+        if(agreed!=networkNisAgreed)log("NET NIS_AGREED %s tick=%u",agreed?"ready":"not ready",networkTick);networkNisAgreed=agreed;
+        networkAreaChangeAgreed=(both&8)!=0;networkStreamDoneAgreed=(both&16)!=0;unsigned exit=both&3;if(exit!=networkExitAgreed)log("NET EXIT_AGREED unlocked=%u next_area_loaded=%u tick=%u",exit>>1,exit&1,networkTick);networkExitAgreed=exit;
+        host[networkNisAction]=0;partner[networkNisAction]=0;}
     unsigned hostSlot=networkSwapSlot(host,partner);applyNetworkActions(hostSlot,host);applyNetworkActions(1-hostSlot,partner);++networkTick;
 }
 // Native constructor4E1EFB writes vtables at+0/+28, zeroes2C/30,
@@ -970,6 +1171,68 @@ static void transitionFixture(unsigned tick){
     }
     if(tick%120==0)log("TRANSITION WAITING_FORWARD_EXIT tick=%u trigger_count=%lu",tick,count);
 }
+// Research level runner (COOP_PROBE_LEVEL_END_TEST=1, campaign bots): the first mission starts in Tokyo/1_Level/4_Area
+// (campaignBeforeLoad swaps the requested descriptor 5836CC -> 583660), then, inside the lockstep simulation on both
+// seats at the same tick, the party is put into the area's LevelEnd trigger and its enter callback runs, so the real
+// end script plays (Black Cat meeting NIS, results) and the game returns to the hub like after a played level.
+static unsigned levelEndDone=0;static bool levelEndTest=false,levelEndEntered=false;static unsigned levelEndAreaTick=0;static DWORD levelEndArea=0;
+// Mission start area -> where the runner starts it, and that mission's last area (analysis/native/campaign-areas.json
+// forward chains). Boss missions start in the area before the boss arena (a direct start in the arena crashes the
+// retail game at 45CE49 on both seats) and walk into it through the real forward exit.
+struct LevelEndArea{DWORD start,run,last;bool boss;};
+static const LevelEndArea levelEndAreas[]={{0x5836cc,0x583660,0x583660,false},{0x583764,0x583764,0x583740,true},{0x583834,0x5837a4,0x5837a4,false},
+    {0x583ce0,0x583c74,0x583c74,false},{0x583de0,0x583d50,0x583d50,false},{0x583ee4,0x583e54,0x583e54,false},{0x583fa0,0x583f7c,0x583f58,true},
+    {0x5839c0,0x583954,0x583954,false},{0x583a7c,0x583a58,0x583a34,true},{0x583b50,0x583ac0,0x583ac0,false},{0x583c0c,0x583be8,0x583bc4,true},
+    {0x584454,0x5843c4,0x5843c4,false},{0x584558,0x5844c8,0x5844c8,false},{0x584680,0x5845cc,0x5845cc,false},{0x584740,0x584740,0x5846f8,true},
+    {0x584098,0x584008,0x584008,false},{0x58419c,0x58410c,0x58410c,false},{0x5842a0,0x5842a0,0x584210,false},{0x58435c,0x584338,0x584314,true},{0x5838cc,0x5838cc,0x5838a8,true},
+    // Middle areas of missions that start at 1_Area: Nepal 4 (a 2_Area start crashed both seats at 48739F after the
+    // Mysterio intro; the 1_Area start crashed the same way) and Transylvania 3 (a 4_Area start crashed at 4D33B4).
+    {0,0x58471c,0x5846f8,true},{0,0x58427c,0x584210,false},{0,0x584258,0x584210,false}};
+static const LevelEndArea* levelEndByStart(DWORD area){for(auto& level:levelEndAreas)if(level.start==area)return &level;return 0;}
+static const LevelEndArea* levelEndByArea(DWORD area){for(auto& level:levelEndAreas)if(level.run==area||level.last==area)return &level;return 0;}
+static bool triggerText(DWORD trigger,char (&name)[33]){memset(name,0,sizeof(name));if(!readMemory((void*)(trigger+0x80),name,32))return false;name[32]=0;
+    for(unsigned i=0;name[i];i++)if(name[i]<0x20||name[i]>0x7e)return false;return name[0]!=0;}
+static void levelEndFixture(unsigned tick){
+    if(!levelEndTest)return;DWORD areas=readWord(0x6a9974),current=readWord(areas+0x18);const LevelEndArea* level=levelEndByArea(current);
+    if(current!=levelEndArea){levelEndArea=current;levelEndAreaTick=tick;levelEndEntered=false;
+        if(level){DWORD pool=readWord(0x6a9970),count=readWord(pool+8),items=readWord(pool+4);log("LEVEL_END area %08lx reached tick=%u last=%d boss=%d triggers=%lu",current,tick,current==level->last,level->boss,count);
+            for(unsigned i=0;i<count&&i<128;i++){DWORD trigger=readWord(items+i*4);if(!trigger)continue;char name[33];bool named=triggerText(trigger,name);
+                log("LEVEL_END TRIGGER index=%u name=%s table=%08lx enter=%08lx flags=%08lx kind=%lu center=%.5g,%.5g,%.5g",i,named?name:"-",readWord(trigger),readWord(readWord(trigger)+0x24),readWord(trigger+0x74),readWord(trigger+0x80),readFloat(trigger+0x50),readFloat(trigger+0x54),readFloat(trigger+0x58));}}}
+    if(!level||levelEndEntered||tick<levelEndAreaTick+600||readWord(readWord(0x6a9988)+0x2c))return;   // settle, and wait for an idle transition manager
+    DWORD party=readWord(0x6a9900),actors[2]={readWord(party+0x12c),readWord(party+0x138)};
+    for(DWORD actor:actors)if(!actor||readWord(readWord(actor)+0x640)!=0x459fe4){if(tick%600==0)log("LEVEL_END party warp guard");return;}
+    auto enterTrigger=[&](DWORD trigger,DWORD enter,const char* what){
+        float center[3]={readFloat(trigger+0x50),readFloat(trigger+0x54),readFloat(trigger+0x58)},target[3]={center[0],center[1],center[2]-readFloat(0x55b520)};
+        for(DWORD actor:actors){WORD heading=0;readMemory((void*)(readWord(actor+0x1d0)+12),&heading,2);((void(__thiscall*)(void*,const float*,unsigned,bool))0x459fe4)((void*)actor,target,heading,true);}
+        ((void(__thiscall*)(void*,void*))enter)((void*)trigger,(void*)actors[0]);levelEndEntered=true;
+        log("LEVEL_END ENTERED %s tick=%u area=%08lx enter=%08lx flags=%08lx center=%.5g,%.5g,%.5g",what,tick,current,enter,readWord(trigger+0x74),center[0],center[1],center[2]);};
+    DWORD pool=readWord(0x6a9970),count=readWord(pool+8),items=readWord(pool+4);
+    if(current!=level->last){
+        // Not the last area yet (boss missions): take the area's forward exit, even while the fight still keeps it locked.
+        for(unsigned i=0;i<count&&i<256;i++){DWORD trigger=readWord(items+i*4);if(!trigger||readWord(trigger)!=0x576074||!readWord(trigger+0x78)||readWord(trigger+0x80)!=2)continue;
+            enterTrigger(trigger,0x4d244b,"forward_exit");return;}
+        if((tick-levelEndAreaTick)%600==0)log("LEVEL_END no forward exit tick=%u",tick);return;}
+    for(unsigned i=0;i<count&&i<256;i++){DWORD trigger=readWord(items+i*4);char name[33];if(!trigger||!triggerText(trigger,name))continue;
+        // Missions end at a LevelEnd trigger, a sidekick meeting (Egypt 2: MeetingLizard) or a transformation scene (Nepal 2).
+        bool end=!_strnicmp(name,"Meeting",7)||strstr(name,"Transformation")!=0;for(unsigned j=0;name[j];j++)if(!_strnicmp(name+j,"LevelEnd",8))end=true;if(!end)continue;
+        DWORD enter=readWord(readWord(trigger)+0x24);if(enter<0x401000||enter>=0x555000){log("LEVEL_END trigger %s has no enter callback",name);continue;}
+        enterTrigger(trigger,enter,name);levelEndDone|=1u<<(unsigned)(level-levelEndAreas);return;}
+    if(level->boss&&tick>=levelEndAreaTick+1200){
+        // Boss arena: run the area script's own BossBattleDefeated function (records the win, then ends the mission),
+        // through the same name-hash event call the game uses for OnEnter_Start (40DF49 hash, 40BA8C call).
+        DWORD world=readWord(areas+4+readWord(areas+0x14)*4),script=world?readWord(world+0x88):0;if(!script){log("LEVEL_END boss arena has no script");levelEndEntered=true;return;}
+        DWORD hash=0xffffffff;for(const char* c="BossBattleDefeated";*c;c++)hash=hash*33+(BYTE)*c;
+        __asm{
+            push esi
+            mov esi,script
+            push hash
+            mov eax,0x40ba8c
+            call eax
+            pop esi
+        }
+        levelEndEntered=true;levelEndDone|=1u<<(unsigned)(level-levelEndAreas);log("LEVEL_END ENTERED BossBattleDefeated tick=%u area=%08lx script=%08lx",tick,current,script);return;}
+    if((tick-levelEndAreaTick)%600==0)log("LEVEL_END no LevelEnd trigger yet tick=%u",tick);
+}
 // Test-only: call the retail mission-end routine (native131 body 4E323C, the same
 // call LevelEnd/meeting/boss scripts make) on both seats at one lockstep tick.
 // Its guard 4E3D1E yields through the VM argument while a transition is busy,
@@ -990,7 +1253,7 @@ static void missionEndFixture(unsigned tick){
 }
 static void __fastcall simulation(void* task,void*,float dt){
     DWORD flow=readWord(0x69e72c);
-    if(networkLockstep()&&flow&&readWord(flow+8)==128){if(!networkReady||networkFailed||networkComplete||!networkTick)return;if(readWord(0x69ed24)!=0){networkFailed=true;log("NET FAIL unexpected simulation mode");return;}networkSimulationThread=GetCurrentThreadId();networkInSimulation=true;BYTE previousPathFlag=*(BYTE*)0x590718;if(networkPathSync)*(BYTE*)0x590718=1;transitionFixture(networkTick-1);missionEndFixture(networkTick-1);if(!networkFailed)originalSimulation(task,dt);if(networkPathSync)*(BYTE*)0x590718=previousPathFlag;networkInSimulation=false;if(!networkFailed)observeNetworkState(networkTick-1);}
+    if(networkLockstep()&&flow&&readWord(flow+8)==128){if(!networkReady||networkFailed||networkComplete||!networkTick)return;if(readWord(0x69ed24)!=0){networkFailed=true;log("NET FAIL unexpected simulation mode");return;}networkSimulationThread=GetCurrentThreadId();networkInSimulation=true;BYTE previousPathFlag=*(BYTE*)0x590718;if(networkPathSync)*(BYTE*)0x590718=1;areaChangeRun(networkTick-1);transitionFixture(networkTick-1);missionEndFixture(networkTick-1);levelEndFixture(networkTick-1);if(!networkFailed)originalSimulation(task,dt);if(networkPathSync)*(BYTE*)0x590718=previousPathFlag;networkInSimulation=false;if(!networkFailed)observeNetworkState(networkTick-1);}
     else originalSimulation(task,dt);
 }
 struct TaskTimingHook {void** table;SimulationFn original;};
@@ -1131,7 +1394,7 @@ static bool campaignWaitPhase(unsigned sequence,const coop::PhaseState& state,co
         Sleep(5);
     }
 }
-static bool campaignMenuPending=false;static coop::PhaseState campaignMenuSent;
+static bool campaignMenuPending=false;static coop::PhaseState campaignMenuSent;static double campaignMenuSentAt=0;
 static coop::PhaseState campaignExchange(const coop::PhaseState& state){
     if(!networkReady&&!openNetworkConnection())campaignReject("transport open");
     // A hub update still in flight (sent, not yet answered) is completed first, so both games keep pairing the same
@@ -1159,7 +1422,7 @@ static bool campaignMenuExchange(coop::PhaseState& state,coop::PhaseState& peer)
     if(!networkReady&&!openNetworkConnection())campaignReject("transport open");
     unsigned sequence=campaignPhaseSequence;int got=0;
     if(!campaignMenuPending){
-        if(!networkWire->SendPhase(sequence,state))got=-1;else{campaignMenuPending=true;campaignMenuSent=state;}
+        if(!networkWire->SendPhase(sequence,state))got=-1;else{campaignMenuPending=true;campaignMenuSent=state;campaignMenuSentAt=milliseconds();}
     }
     if(got==0)got=networkWire->TryReceivePhase(sequence,peer);
     if(got==0){static unsigned waits=0;if(waits++%600==0)log("CAMPAIGN MENU_WAIT sequence=%u kind=%lu (partner not there yet)",sequence,campaignMenuSent.id);return false;}
@@ -1169,7 +1432,7 @@ static bool campaignMenuExchange(coop::PhaseState& state,coop::PhaseState& peer)
         if(networkWire->PeerStopped()){networkComplete=true;log("NET peer ended session normally phase=%u",sequence);ExitProcess(0);}
         log("NET FAIL CAMPAIGN phase transport=%s",networkWire->Error().c_str());campaignReject("phase transport failure or timeout");
     }
-    campaignMenuPending=false;campaignPhaseSequence++;state=campaignMenuSent;
+    campaignMenuPending=false;campaignPhaseSequence++;state=campaignMenuSent;hubRoundSamples[hubRoundCount++%256]=(float)(milliseconds()-campaignMenuSentAt);
     if(!coop::CampaignPhaseValid(peer))campaignReject("invalid phase metadata");return true;
 }
 static void campaignExactBarrier(coop::PhaseState state){
@@ -1201,7 +1464,7 @@ static void campaignNeutralMenu(){
     }
 }
 static unsigned campaignMenuBits(const coop::Actions& actions){unsigned bits=0;for(unsigned i=0;i<28;i++)if(actions[i]>0.5f)bits|=1u<<i;return bits;}
-static DWORD campaignMenuContext=0;static unsigned campaignMenuKind=0,campaignMenuCalls[8]={};
+static DWORD campaignMenuContext=0;static unsigned campaignMenuKind=0,campaignMenuCalls[16]={};
 // Hub sidekick computer (trigger SidekickSelect): its focus value (scene+0x84) observed in runs sidekick-294/301.
 static const unsigned campaignSidekickTerminal=0xdceff376u;
 // Sidekick Select screen (scene 42, table 56F298, update 4A6C6F): grid row at [scene+0x88]+0x8D08, sidekick id per row
@@ -1294,12 +1557,18 @@ static unsigned campaignHubWalkBits(unsigned focus,unsigned calls){
     static unsigned phase=0,phaseStart=0,tried=0,targetStart=0,arrived=0,bestAt=0,detourUntil=0,detours=0;static int target=-1;static float start[3],axisX[2],axisY[2],best=1e9f;
     if(campaignHubWalkReset){campaignHubWalkReset=false;tried=0;target=-1;arrived=0;}
     float p[3]={};if(!campaignHubPlayer(p))return 0;
-    if(focus==campaignMissionGraphHash())return calls%120==60?1u<<10:0;
+    // At the mission terminal: Accept, and keep stepping toward its centre. The hub is not in lockstep, so the partner's
+    // copy of P1 can stand a few cm off; at the edge of the volume only this PC saw the terminal (level-regions-461).
+    bool missionFocus=focus&&focus==campaignMissionGraphHash();
+    if(missionFocus&&(calls%120==60||phase!=3||target<0))return calls%120==60?1u<<10:0;
     if(phase==0){memcpy(start,p,sizeof(start));phase=1;phaseStart=calls;}
     if(phase==1){if(calls-phaseStart<30)return 1u<<19;axisX[0]=p[0]-start[0];axisX[1]=p[1]-start[1];memcpy(start,p,sizeof(start));phase=2;phaseStart=calls;}
     if(phase==2){if(calls-phaseStart<30)return 1u<<16;axisY[0]=p[0]-start[0];axisY[1]=p[1]-start[1];phase=3;
         log("CAMPAIGN HUB_WALK calibrated right=%.4g,%.4g up=%.4g,%.4g",axisX[0],axisX[1],axisY[0],axisY[1]);
-        if(std::hypot(axisX[0],axisX[1])<0.05f||std::hypot(axisY[0],axisY[1])<0.05f){log("CAMPAIGN HUB_WALK stick did not move P1");phase=9;}}
+        // A measurement taken while the game is busy (join handshake, a warp) is implausible: measure again (run
+        // net-bad-rejoin-439 under fake latency calibrated right=12.33 m in 30 frames, up=0, and gave up for good).
+        float rx=std::hypot(axisX[0],axisX[1]),ry=std::hypot(axisY[0],axisY[1]);static unsigned recalibrations=0;
+        if(rx<0.05f||ry<0.05f||rx>6.0f||ry>6.0f){if(++recalibrations<=20){log("CAMPAIGN HUB_WALK calibration implausible, measuring again (%u)",recalibrations);phase=0;}else{log("CAMPAIGN HUB_WALK stick did not move P1");phase=9;}}}
     if(phase!=3)return 0;
     DWORD pool=readWord(0x6a9970),count=readWord(pool+8),items=readWord(pool+4);if(count>256)return 0;
     if(target<0||(tried>>target)&1){target=-1;
@@ -1313,11 +1582,12 @@ static unsigned campaignHubWalkBits(unsigned focus,unsigned calls){
     if(focus&&campaignSidekickTest&&!campaignSidekickVisited){char name[33];campaignTriggerName(trigger,name);
         if(!strcmp(name,"SidekickSelect")){static unsigned pressed=0;if(calls%120==60){++pressed;campaignSidekickFocus=focus;campaignSidekickVisited=true;log("CAMPAIGN SIDEKICK_TEST focus=%08x accept",focus);campaignCaptureAt=(LONG)presentCalls;return 1u<<10;}return 0;}}
     if(focus==campaignSidekickTerminal&&campaignSidekickVisited)focus=0; // still standing at the sidekick computer
-    if(focus){char name[33];campaignTriggerName(trigger,name);log("CAMPAIGN HUB_WALK focus=%08x at target=%s is not the mission terminal",focus,name);tried|=1u<<target;return 0;}
+    if(focus&&!missionFocus){char name[33];campaignTriggerName(trigger,name);log("CAMPAIGN HUB_WALK focus=%08x at target=%s is not the mission terminal",focus,name);tried|=1u<<target;return 0;}
     float d[2]={readFloat(trigger+0x50)-p[0],readFloat(trigger+0x54)-p[1]},distance=std::hypot(d[0],d[1]);
     if(calls-targetStart>1800){log("CAMPAIGN HUB_WALK timeout target=%d distance=%.4g detours=%u",target,distance,detours);tried|=1u<<target;return 0;}
     float feet[3]={p[0],p[1],p[2]+readFloat(0x55b520)};
-    if(triggerContains(trigger,feet)||distance<0.3f){if(!arrived){arrived=calls;log("CAMPAIGN HUB_WALK inside target=%d distance=%.4g",target,distance);}if(calls-arrived>120){log("CAMPAIGN HUB_WALK no focus at target=%d",target);tried|=1u<<target;}return 0;}
+    if(missionFocus&&distance<0.6f)return 0;
+    if(!missionFocus&&(triggerContains(trigger,feet)||distance<0.3f)){if(!arrived){arrived=calls;log("CAMPAIGN HUB_WALK inside target=%d distance=%.4g",target,distance);}if(calls-arrived>120){log("CAMPAIGN HUB_WALK no focus at target=%d",target);tried|=1u<<target;}return 0;}
     if(distance<best-0.1f){best=distance;bestAt=calls;}
     if(calls>=detourUntil&&calls-bestAt>90){detourUntil=calls+40;bestAt=calls+40;++detours;log("CAMPAIGN HUB_WALK detour target=%d distance=%.4g count=%u",target,distance,detours);}
     if(calls<detourUntil){float side=(detours&1)?1.0f:-1.0f,t=d[0];d[0]=-d[1]*side;d[1]=t*side;}
@@ -1441,7 +1711,7 @@ static bool campaignMenuBegin(void* object,unsigned kind,DWORD listOffset){
     unsigned selection=0xffffffffu,available=1;DWORD list=0;
     if(listOffset){list=readWord(scene+listOffset);selection=list?readWord(list+0x8d08):0xffffffffu;if(kind==4&&selection<4){BYTE enabled=0;readMemory((void*)(list+selection*0x234+0xb5),&enabled,1);available=enabled?1:0;}
         if(kind==7)available=campaignSidekickRowAvailable(selection)?1:0;}
-    else selection=readWord(scene+0x84);
+    else selection=kind==8?0u:readWord(scene+0x84);  // the popup's +84 is a pointer (differs per PC)
     auto state=campaignState(coop::phaseMenu,kind,selection);state.auxiliary[5]=available;
     float hubPosition[3]={};bool hubPositionValid=kind==3&&campaignHub&&!campaignMission&&campaignHubPlayer(hubPosition);
     if(kind==3){memcpy(&state.auxiliary[5],hubPosition,sizeof(hubPosition));
@@ -1475,7 +1745,7 @@ static bool campaignMenuBegin(void* object,unsigned kind,DWORD listOffset){
         if(campaignFixture){
             // Only validated default New Game, native slot0 and available first
             // mission choices. Unknown modal classes get no invented actions.
-            if(calls>=60&&calls%120==60&&(kind==1||kind==2||kind==4||kind==5||kind==6))bits=1u<<10;
+            if(calls>=60&&calls%120==60&&(kind==1||kind==2||kind==4||kind==5||kind==6||kind==8))bits=1u<<10;
             if(kind==2&&selection!=freeRow)bits=0;
             // The mission list fills its rows' availability a little after it opens; press only on an available row
             // (runs hubspawn-141/147 pressed too early: "native mission row is not available").
@@ -1505,7 +1775,7 @@ static bool campaignMenuBegin(void* object,unsigned kind,DWORD listOffset){
             // nobody's keys reached it (first two-PC test, 2026-10-24). Missions keep the shared native pause.
             if(kind==3)bits&=~(1u<<5);
         }
-        if(kind==2||kind==5||kind==6)bits&=1u<<10;
+        if(kind==2||kind==5||kind==6||kind==8)bits&=1u<<10;
         if(kind==7)bits=0;
     }
     // The joiner drives the Sidekick Select screen (its own character): bot steps left to the first other unlocked
@@ -1948,6 +2218,11 @@ static void __fastcall campaignHubUpdate(void* scene,void*,float dt){
     if(campaignLive())campaignMenuBegin(scene,3,0);originalCampaignHub(scene,dt);if(campaignLive()){campaignNeutralMenu();campaignMenuContext=0;if(campaignHub&&!campaignMission)campaignApplyHubMovement();}
 }
 static CampaignUpdate originalCampaignSidekick=0;
+// Popup box (scene 14, popupboxsml.fen, update 49F80E; closes on Accept): shown in the hub after a level end (e.g. a new
+// sidekick). In co-op the hub clears everyone's keys, so nobody could close it (level-end-445): the host's Accept is
+// shared like any campaign menu choice.
+static CampaignUpdate originalCampaignPopup=0;
+static void __fastcall campaignPopupUpdate(void* scene,void*,float dt){if(campaignLive())campaignMenuBegin(scene,8,0);originalCampaignPopup(scene,dt);if(campaignLive()){campaignNeutralMenu();campaignMenuContext=0;}}
 static void __fastcall campaignSidekickUpdate(void* scene,void*,float dt){if(campaignLive())campaignMenuBegin(scene,7,0x88);originalCampaignSidekick(scene,dt);if(campaignLive()){campaignNeutralMenu();campaignMenuContext=0;}}
 static void __fastcall campaignMissionUpdate(void* scene,void*,float dt){if(campaignLive())campaignMenuBegin(scene,4,0x84);originalCampaignMission(scene,dt);if(campaignLive()){campaignNeutralMenu();campaignMenuContext=0;}}
 static void __fastcall campaignSaveAckUpdate(void* scene,void*,float dt){
@@ -2015,6 +2290,26 @@ static void campaignBeforeLoad(){
         }
         return;
     }
+    if(levelEndTest&&levelEndByStart(readWord(readWord(0x6a9974)+0x1c))){
+        // Runner: a mission already finished in this run is replaced by the next unfinished one in table order (the
+        // hub bot always walks to the same terminal), so one run plays every region; then the mission's run area.
+        const LevelEndArea* level=levelEndByStart(readWord(readWord(0x6a9974)+0x1c));unsigned index=(unsigned)(level-levelEndAreas);
+        if(levelEndDone&(1u<<index)){for(unsigned next=0;next<sizeof(levelEndAreas)/sizeof(levelEndAreas[0]);next++)if(!(levelEndDone&(1u<<next))&&levelEndAreas[next].start){level=&levelEndAreas[next];break;}}
+        if(level->run!=readWord(readWord(0x6a9974)+0x1c)){DWORD run=level->run;*(DWORD*)(readWord(0x6a9974)+0x1c)=run;campaignArea(run,path,id);strcpy(campaignMissionPath,path);campaignMissionArea=id;log("LEVEL_END mission start moved to %s",path);}}
+    // Before the first mission frame: both games share their measured connection and use the larger input delay, so a
+    // slow connection does not stall every frame (fake-internet run net-slow-433: 240 ms round trip, 6-frame buffer,
+    // ~48 fps). Two exchanges: values, then a confirmation, so no frame can arrive before both have set it.
+    if(id!=97&&networkRole&&!networkAgreedDelay&&networkWire&&networkReady){
+        // A few direct round trips (both games are waiting here), the first one skipped: it includes the partner's arrival.
+        for(unsigned ping=0;ping<7;ping++){double began=milliseconds();campaignExchange(campaignJoinState(0x30302));if(ping)hubRoundSamples[hubRoundCount++%256]=(float)(milliseconds()-began);}
+        coop::PhaseState mine=campaignJoinState(0x30300);mine.selection=measuredDelayFrames();auto other=campaignExchange(mine);
+        if(other.id!=0x30300||other.selection<1||other.selection>16)campaignReject("input delay agreement");
+        unsigned agreed=mine.selection>other.selection?mine.selection:other.selection;
+        if(!networkWire->SetDelay(agreed))campaignReject("input delay could not be applied before the first frame");
+        auto confirm=campaignJoinState(0x30301);confirm.selection=agreed;auto peerConfirm=campaignExchange(confirm);
+        if(peerConfirm.id!=0x30301||peerConfirm.selection!=agreed)campaignReject("input delay confirmation");
+        networkAgreedDelay=agreed;log("NET INPUT_DELAY frames=%u (this PC measured %lu, partner %lu, hub samples %u)",agreed,mine.selection,other.selection,hubRoundCount);
+    }
     auto state=campaignState(coop::phaseLoad,++campaignLoadSequence,id);state.identity={};memcpy(state.identity.data(),path,strlen(path));state.auxiliary[5]=id;state.auxiliary[7]=readWord(readWord(readWord(0x6a9974)+0x1c)+0x1c);
     if(!networkReady&&!openNetworkConnection())campaignReject("retail transport open before native load");
     if(campaignLoadSequence==1&&networkRole==2&&campaignDelayMs){log("CAMPAIGN PRELOAD_DELAY delay_ms=%u",campaignDelayMs);ULONGLONG begin=GetTickCount64();while(GetTickCount64()-begin<campaignDelayMs){if(networkWire->PeerStopped()){log("NET peer ended session normally before delayed native load");ExitProcess(0);}Sleep(5);}}
@@ -2028,7 +2323,12 @@ static void campaignBeforeLoad(){
         networkInputClock=true;for(unsigned logical=0;logical<4;logical++)*(DWORD*)(0x691170+logical*0x11c+0x110)=10000;*(DWORD*)0x6a98dc=10000;
         log("CAMPAIGN CLOCK origin_ms=10000 before_native_load=1");
     }
-    *(DWORD*)0x58cf24=8466;networkAmbientRng=0x84f19a21;
+    // Area loads inside a running mission keep the shared random state: both games already hold the same value, and
+    // this barrier is passed between lockstep ticks, one tick apart on the two PCs (level-chain-453 diverged here).
+    // In-mission = a later area of the committed mission (not the mission start itself, not the hub); the barrier's own
+    // path decides, which both PCs share (the native flow flag flips between ticks: level-regions-460 diverged).
+    if(networkTick&&campaignMission&&strcmp(path,campaignMissionPath)&&!strstr(path,"FrontEndHub"))log("CAMPAIGN PRELOAD in-mission area load keeps the shared random state tick=%u",networkTick);
+    else{*(DWORD*)0x58cf24=8466;networkAmbientRng=0x84f19a21;}
     log("CAMPAIGN PRELOAD_FORWARD sequence=%u path=%s area=%lu peer_ready=1 original_calls=1",campaignLoadSequence,path,id);
 }
 static bool campaignStartGameplay(){
@@ -2278,7 +2578,8 @@ static bool installCampaign(){
         {0x56d120,0x49eda6,(void*)campaignMissionUpdate,&originalCampaignMission},
         {0x56f090,0x4a5e8a,(void*)campaignSaveAckUpdate,&originalCampaignSaveAck},
         {0x56c1c0,0x49a6db,(void*)campaignAutosaveNoticeUpdate,&originalCampaignAutosaveNotice},
-        {0x56f298,0x4a6c6f,(void*)campaignSidekickUpdate,&originalCampaignSidekick}};
+        {0x56f298,0x4a6c6f,(void*)campaignSidekickUpdate,&originalCampaignSidekick},
+        {0x56d3d8,0x49f80e,(void*)campaignPopupUpdate,&originalCampaignPopup}};
     if(readWord(0x57e6d8+0x18)!=0x51a6cc||readWord(0x57e6d8+0x1c)!=0x4337ec){log("FAIL CAMPAIGN native save task callback guard");return false;}
     for(const auto& entry:entries){void** table=(void**)entry.table;if(table[19]!=(void*)entry.callback||!patchComSlot(table,19,entry.hook,(void**)entry.original)){log("FAIL CAMPAIGN native update vtable guard table=%08lx",entry.table);return false;}}
     void** mission=(void**)0x56d120;if(mission[14]!=(void*)0x49f107||!patchComSlot(mission,14,(void*)campaignMissionDeactivate,(void**)&originalCampaignDeactivate))return false;
@@ -2317,7 +2618,7 @@ static bool install() {
     if(!selfTest&&humanInputMode&&(!patchKeyboardLayoutCall()||!patchVerifiedCall(0x52a770,0x525c30,(void*)guardedKeyLookup)))return false;
     if(campaignMode&&!installCampaign())return false;
     if(!selfTest&&!autoTest&&!installMainMenuAudio())return false;
-    if(campaignMode&&(networkRole||networkDeferred)&&!installNisGate())return false;
+    if(campaignMode&&(networkRole||networkDeferred)&&(!installNisGate()||!installExitGate()||!installNisStopGate()||!installStageLog()))return false;
     return true;
 }
 // Research: a hardware write watch on character entry 1's memory owner (6A8808+0x58+0x20 = 6A8880) on the game
@@ -2387,6 +2688,7 @@ BOOL WINAPI DllMain(HINSTANCE h,DWORD why,LPVOID){if(why!=DLL_PROCESS_ATTACH)ret
     {wchar_t test[4]={0};menuFixture=GetEnvironmentVariableW(L"COOP_PROBE_MENU_FIXTURE",test,4)&&(!wcscmp(test,L"1")||!wcscmp(test,L"2")||!wcscmp(test,L"3"));menuContinueFixture=menuFixture&&!wcscmp(test,L"2");menuNavFixture=menuFixture&&!wcscmp(test,L"3");if(menuFixture&&(!humanInputMode||campaignFixture||networkRole))return FALSE;}
     {wchar_t sound[4]={0};if(GetEnvironmentVariableW(L"COOP_PROBE_HUB_PARTNER_SOUND",sound,4)&&!wcscmp(sound,L"0"))campaignHubPartnerSound=false;}
     {wchar_t skip[4]={0};campaignSkipNis=GetEnvironmentVariableW(L"COOP_PROBE_SKIP_NIS",skip,4)&&!wcscmp(skip,L"1");}
+    {wchar_t test[4]={0};levelEndTest=GetEnvironmentVariableW(L"COOP_PROBE_LEVEL_END_TEST",test,4)&&!wcscmp(test,L"1");{wchar_t mask[16]={0};if(levelEndTest&&GetEnvironmentVariableW(L"COOP_PROBE_LEVEL_END_DONE",mask,16))levelEndDone=wcstoul(mask,0,16);}if(levelEndTest&&!campaignFixture)return FALSE;}
     {wchar_t test[4]={0};networkNisGateTest=GetEnvironmentVariableW(L"COOP_PROBE_NIS_GATE_TEST",test,4)&&!wcscmp(test,L"1");if(networkNisGateTest&&!campaignFixture)return FALSE;}
     {wchar_t test[4]={0};campaignHubJumpTest=GetEnvironmentVariableW(L"COOP_PROBE_HUB_JUMP_TEST",test,4)&&!wcscmp(test,L"1");if(campaignHubJumpTest&&!campaignFixture)return FALSE;}
     {wchar_t skip[4]={0};campaignMovieSkipTest=GetEnvironmentVariableW(L"COOP_PROBE_MOVIE_SKIP_TEST",skip,4)&&!wcscmp(skip,L"1");if(campaignMovieSkipTest&&!campaignFixture)return FALSE;}
@@ -2425,7 +2727,7 @@ BOOL WINAPI DllMain(HINSTANCE h,DWORD why,LPVOID){if(why!=DLL_PROCESS_ATTACH)ret
     // Player edition (FOF_PLAYER_EDITION): only the retail campaign runs. Test bots, scripted scenarios and
     // fault fixtures cannot be switched on; asking for one refuses the launch instead of running it.
     if(autoTest||inputBot||playBot||actionBot||campaignFixture||humanInputFixture||humanDisconnectFixture||humanKeyboardFixture||
-       networkJitterFixture||networkMutateFixture||networkTransitionFixture||networkMissionEndFixture||networkPauseFixture||campaignSidekickTest||menuFixture||swapFixture||networkNisGateTest||campaignMovieSkipTest||campaignHubJumpTest||campaignHubWalkDpad||campaignHostWaitLink||campaignHostContinue||
+       networkJitterFixture||networkMutateFixture||networkTransitionFixture||networkMissionEndFixture||networkPauseFixture||campaignSidekickTest||menuFixture||swapFixture||levelEndTest||networkNisGateTest||campaignMovieSkipTest||campaignHubJumpTest||campaignHubWalkDpad||campaignHostWaitLink||campaignHostContinue||
        (!campaignMode&&!selfTest))return FALSE;
     log("FOF_PLAYER_EDITION bots and test fixtures disabled");
 #endif

@@ -29,6 +29,9 @@ public:
     // expects the peer to be slow for a while (loading, not yet past a one-time menu) can
     // raise this, then lower it again once both sides are actively exchanging every frame.
     void SetTimeout(unsigned timeoutMs);
+    // Change the input delay agreed in Open, only before any input frame was sent or received; both peers must set
+    // the same value before either sends its first frame (agree it in a phase exchange first).
+    bool SetDelay(unsigned frames);
     bool Step(std::uint32_t tick,const Actions& local,Actions& remote,
               std::uint64_t localState=0,std::uint64_t* remoteState=nullptr);
     // Sequence starts at zero independently of gameplay ticks. Returns the peer

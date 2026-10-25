@@ -70,13 +70,13 @@ def no_reparse(path, new=False):
     return path
 
 
-def environment(source, seat, diagnostics=True, campaign=False, deferred=False, profile=None, hub_spawn=-1, skip_nis=False, auto_together=True):
+def environment(source, seat, diagnostics=True, campaign=False, deferred=False, profile=None, hub_spawn=-1, skip_nis=False, auto_together=True, net_port="49375"):
     env = {key: value for key, value in source.items() if not key.upper().startswith("COOP_PROBE_")}
     values = {
         "AUTOTEST": "ExecutionPath", "INPUTBOT": "0", "PLAYBOT": "0", "ACTIONBOT": "0",
         "HUMAN": "1", "HUMAN_FIXTURE": "0", "PATHSYNC": "1", "AMBIENT_SPLIT": "1",
         "CLEAN_EXIT": "1", "NET_MODE": "host" if seat == "host" else "join", "NET_FRAMES": "0",
-        "NET_ADDRESS": "127.0.0.1", "NET_PORT": "49375", "AREA": "Tokyo/1_Level/1_Area",
+        "NET_ADDRESS": "127.0.0.1", "NET_PORT": net_port, "AREA": "Tokyo/1_Level/1_Area",
         "CONTENT_SHA256": CRITICAL,
         "DIAGNOSTICS": "1" if diagnostics else "0",
     }
@@ -96,6 +96,10 @@ def environment(source, seat, diagnostics=True, campaign=False, deferred=False, 
             values["MOVIE_SKIP_TEST"] = "1"
         if os.environ.get("FOF_RESEARCH_HUB_JUMP_TEST") == "1":
             values["HUB_JUMP_TEST"] = "1"
+        if os.environ.get("FOF_RESEARCH_LEVEL_END_TEST") == "1":
+            values["LEVEL_END_TEST"] = "1"
+            if os.environ.get("FOF_RESEARCH_LEVEL_END_DONE"):
+                values["LEVEL_END_DONE"] = os.environ["FOF_RESEARCH_LEVEL_END_DONE"]
         if os.environ.get("FOF_RESEARCH_NIS_GATE_TEST") == "1":
             values["NIS_GATE_TEST"] = "1"
         if os.environ.get("FOF_RESEARCH_HUB_WALK_DPAD") == "1":
@@ -289,6 +293,8 @@ def run(args):
         events.write(value + "\n")
         print(value, flush=True)
 
+    proxy = None
+
     def popen(command, log, env, label):
         stream = log.open("xb")
         streams.append(stream)
@@ -345,13 +351,25 @@ def run(args):
             saves.mkdir(parents=True)
             (saves / "SavedGame1.SFOFSaveGame").write_bytes(Path(args.seed_save).read_bytes())
             event("HOST_PROFILE_SEEDED", slots=[1])
+        # Fake internet (qa/latency_proxy.py): the joiner connects through a delaying relay on port 49376.
+        peer_port = "49375"
+        if args.net_delay_ms is not None:
+            proxy_log = result / "latency-proxy.jsonl"
+            proxy_out = (result / "latency-proxy.log").open("w", encoding="utf-8")
+            streams.append(proxy_out)
+            proxy = subprocess.Popen([sys.executable, "-I", str(ROOT / "qa" / "latency_proxy.py"), "--listen", "49376", "--target", "49375",
+                                      "--delay-ms", str(args.net_delay_ms), "--jitter-ms", str(args.net_jitter_ms),
+                                      "--stall-every", str(args.net_stall_every), "--stall-ms", str(args.net_stall_ms), "--log", str(proxy_log)],
+                                     cwd=ROOT, stdout=proxy_out, stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW)
+            peer_port = "49376"
+            event("FAKE_INTERNET", one_way_delay_ms=args.net_delay_ms, jitter_ms=args.net_jitter_ms, stall_every_s=args.net_stall_every, stall_ms=args.net_stall_ms)
         for i, seat in enumerate(SEATS):
             process = popen([str(ROOT / "probe" / "native-launcher.exe"), "--play",
                 str(ROOT / "test" / LANGUAGES[i].lower() / "Game.exe"), str(boxes[i])],
                 launcher_logs[i], environment(os.environ, seat, not args.quiet, args.campaign, args.deferred_connect > 0 or args.join_at_hub,
                             host_profile if (args.join_at_hub or args.together) and seat == "host" else None, args.hub_spawn,
                             args.skip_cutscenes == "both" or (args.skip_cutscenes == "host" and seat == "host"),
-                            not args.no_auto_together), seat + "-launcher")
+                            not args.no_auto_together, "49375" if seat == "host" else peer_port), seat + "-launcher")
             launchers.append(process)
             lane.register_launcher(process)
         last_report = 0
@@ -398,7 +416,7 @@ def run(args):
                 games[1] = None
                 launchers[1] = popen([str(ROOT / "probe" / "native-launcher.exe"), "--play",
                     str(ROOT / "test" / LANGUAGES[1].lower() / "Game.exe"), str(boxes[1])],
-                    launcher_logs[1], environment(os.environ, "peer", not args.quiet, args.campaign, True, None, auto_together=not args.no_auto_together), "peer2-launcher")
+                    launcher_logs[1], environment(os.environ, "peer", not args.quiet, args.campaign, True, None, auto_together=not args.no_auto_together, net_port=peer_port), "peer2-launcher")
                 lane.register_launcher(launchers[1])
                 connected, rejoin_stage = False, 2
                 event("HOST_CONTINUED_ALONE_REPLACEMENT_PEER_STARTED")
@@ -481,6 +499,12 @@ def run(args):
     except KeyboardInterrupt:
         summary["errors"].append("Interrupted; cleaning up only this run's owned handles")
     finally:
+        if proxy is not None:
+            try:
+                proxy.terminate()
+                proxy.wait(timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
         if api is not None:
             try:
                 if any(game is not None and api.exit(game) is None for game in games):
@@ -582,6 +606,10 @@ def main(argv=None):
     parser.add_argument("--frames", type=int, default=300)
     parser.add_argument("--one-sided-stop", action="store_true", help="Close only the owned host; peer must receive explicit normal-stop and exit0")
     parser.add_argument("--quiet", action="store_true", help="Verify sparse logging every120 ticks and no diagnostic images; live checksums still run every tick")
+    parser.add_argument("--net-delay-ms", type=float, help="Fake internet: one-way delay between the seats (round trip = twice)")
+    parser.add_argument("--net-jitter-ms", type=float, default=0.0)
+    parser.add_argument("--net-stall-every", type=float, default=0.0, help="Fake internet: seconds between stalls")
+    parser.add_argument("--net-stall-ms", type=float, default=0.0)
     parser.add_argument("--no-auto-together", action="store_true",
                         help="Keep the plain join-at-hub route even when the host is still in the main menu")
     parser.add_argument("--join-at-hub", action="store_true",
@@ -622,7 +650,9 @@ def main(argv=None):
         parser.error("--rejoin requires --join-at-hub")
     if args.join_at_hub and (not args.campaign or args.deferred_connect):
         parser.error("--join-at-hub requires --campaign and excludes --deferred-connect")
-    if not 60 <= args.seconds <= (1500 if args.join_at_hub else 900 if args.campaign else 240) or not 300 <= args.frames <= 3600:
+    # The research level runner plays several mission ends in one run, so it may run longer.
+    level_runner = os.environ.get("FOF_RESEARCH_LEVEL_END_TEST") == "1"
+    if not 60 <= args.seconds <= (3600 if level_runner else 1500 if args.join_at_hub else 900 if args.campaign else 240) or not 300 <= args.frames <= (60000 if level_runner else 3600):
         parser.error("--seconds must be60..240 (60..900 with --campaign); --frames must be300..3600")
     return run(args)
 

@@ -33,7 +33,7 @@ bool transfer(SOCKET socket,void* bytes,int count,bool sending){
 struct InputWire::Impl {
     SOCKET socket=INVALID_SOCKET;
     bool wsa=false;
-    unsigned delay=3,timeoutMs=15000;
+    std::atomic<unsigned> delay{3};unsigned timeoutMs=15000;std::atomic<bool> framesSeen{false};
     std::uint32_t outgoing=0;
     std::uint32_t phaseOutgoing=0;
     std::atomic<std::uint32_t> consumed{0};
@@ -70,7 +70,8 @@ struct InputWire::Impl {
         return remaining==0;
     }
     void Read(){
-        std::uint32_t expected=delay,phaseExpected=0;
+        // The input delay may be set once before the first frame (SetDelay); read it when the first frame arrives.
+        std::uint32_t expected=~0u,phaseExpected=0;
         while(running){
             Frame frame={};if(!ReceiveFrame(frame)){if(running&&!localStopped)Fail("Peer disconnected or receive failed");break;}
             if(frame.magic==phaseMagic){
@@ -81,6 +82,7 @@ struct InputWire::Impl {
                 if(!queued){Fail("Phase queue limit or duplicate phase packet");break;}
                 ++phaseExpected;ready.notify_all();continue;
             }
+            if(frame.magic!=phaseMagic&&expected==~0u)expected=delay.load();
             if(frame.magic==stopMagic){
                 bool empty=frame.state==0;for(float value:frame.actions)if(value!=0)empty=false;
                 if(frame.tick>0xffffff00u||frame.tick+delay!=expected||!empty){Fail("Invalid stop sequence or payload");break;}
@@ -93,7 +95,7 @@ struct InputWire::Impl {
                 ready.notify_all();return;
             }
             if(frame.magic!=frameMagic||frame.tick!=expected||!valid(frame.actions)||frame.tick>consumed.load()+128){Fail("Invalid or out-of-order input frame");break;}
-            {std::lock_guard<std::mutex> lock(queueMutex);queue.emplace(frame.tick,frame);}
+            framesSeen=true;{std::lock_guard<std::mutex> lock(queueMutex);queue.emplace(frame.tick,frame);}
             ++expected;ready.notify_all();
         }
     }
@@ -147,6 +149,11 @@ bool InputWire::Open(bool host,const char* ipv4,std::uint16_t port,const Digest&
     // API waits remain bounded and Fail/Close shuts down a stalled reader.
     DWORD idleReceive=0;if(setsockopt(impl->socket,SOL_SOCKET,SO_RCVTIMEO,(char*)&idleReceive,sizeof(idleReceive))==SOCKET_ERROR)return impl->Fail("Receive idle configuration failed");
     impl->running=true;impl->reader=std::thread([this]{impl->Read();});return true;
+}
+bool InputWire::SetDelay(unsigned frames){
+    std::lock_guard<std::mutex> sending(impl->sendMutex);
+    if(!impl->running||frames<1||frames>16||impl->outgoing!=0||impl->framesSeen)return false;
+    impl->delay=frames;return true;
 }
 bool InputWire::Step(std::uint32_t tick,const Actions& local,Actions& remote,std::uint64_t localState,std::uint64_t* remoteState){
     std::unique_lock<std::mutex> sending(impl->sendMutex);

@@ -6,9 +6,9 @@ Two friends, two Windows game instances, and an independent English or Russian l
 
 **Alpha · active development.** Test builds are on the [Releases](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases) page (marked alpha; expect bugs). No game files or Steam libraries are distributed here: you need your own copy of the game. The launcher's play mode uses the native campaign route; the bounded Tokyo scenario remains for automated connection checks.
 
-## Current state (2026-10-24, v0.1.6-alpha-player)
+## Current state (2026-10-25, v0.1.11-alpha-player)
 
-The campaign route runs end to end in automated tests: New Game or Continue on the host, the Helicarrier hub, the mission computer, the first Tokyo mission and the return to the hub.
+The campaign route runs end to end in automated tests: New Game or Continue on the host, the Helicarrier hub, the mission computer, missions and the return to the hub. A test runner that shortens each mission to its ending played **17 of the 20 campaign missions** in sync, in all five regions, including the Doc Ock, Green Goblin, Sandman, Scorpion and Rhino fights (level exits, boss intro cutscenes, results screen and recorded progress identical on both games), also over a simulated bad connection (240 ms round trip, jitter, a 600 ms freeze every 10 s). Nepal 4 (Mysterio) and Transylvania 3 crash on both games at the same place and are under investigation; Transylvania 4 (Venom) has not been reached.
 
 - **Launcher:** two big buttons, HOST and JOIN, in 11 languages. HOST opens the host's game and the lobby; the friend pastes the code and clicks JOIN, and their game opens and connects by itself. Import ("Locate game install") links the game files instead of copying them.
 - **Two ways in, chosen automatically:** if the friend joins while the host is still in the main menu, both start together and watch the opening (the host picks New Game). If the host picks Continue or is already playing, the friend's game catches up and appears next to the host in the Helicarrier. A friend who leaves can rejoin there.
@@ -16,7 +16,7 @@ The campaign route runs end to end in automated tests: New Game or Continue on t
 - **Cutscenes:** each player may skip or watch; the one ahead waits with a "Waiting for your partner…" box until the other catches up.
 - **Settings:** Audio Settings are also in the main menu's Options; keyboard players start with the game's Laptop controls layout; the game's settings are kept between launches. The game runs at 60 frames per second, alone and in co-op.
 
-All of this was checked with bots on one PC with a mock Steam relay. Two PCs over real Steam, real controllers, later missions and shared saves remain untested; testing with real players is starting.
+All of this was checked with bots on one PC with a mock Steam relay. Players have finished the first Tokyo mission together on two PCs over real Steam; the later missions so far only ran with bots (shortened to their endings). Real controllers and shared saves remain untested.
 
 ## What has been demonstrated
 
@@ -34,20 +34,21 @@ Earlier **run 033** failed on both clients during native startup, before gamepla
 
 ## How far along?
 
-**About 63 / 100 toward a first playable release** (updated 2026-10-24, v0.1.6-alpha-player). This is an engineering judgement about milestones, not a measured coverage percentage or a delivery date.
+**About 72 / 100 toward a first playable release** (updated 2026-10-25, v0.1.11-alpha-player). This is an engineering judgement about milestones, not a measured coverage percentage or a delivery date.
 
 What works in automated tests (bots, one PC, mock Steam relay):
 
-- The campaign route end to end: New Game or Continue, the Helicarrier, the mission computer, the first Tokyo mission and the return to the Helicarrier.
+- The campaign route end to end: New Game or Continue, the Helicarrier, the mission computer, missions and the return to the Helicarrier.
+- 17 of 20 missions shortened to their endings, all five regions and five bosses, in sync, also over a simulated bad connection.
 - Starting together from the main menu (both watch the opening) or joining the host in the Helicarrier; a friend who leaves can rejoin.
 - Picking the friend's sidekick, swapping characters with TAB, native pause, cutscenes skipped at different times.
 - A player launcher in 11 languages with HOST / JOIN, published as alpha releases; game settings are kept between launches.
 
 What is still missing before a first playable release:
 
-- **A real session between two PCs over Steam** (the biggest open item).
-- Later missions and bosses, mission completion being recorded, and saving the shared campaign from both sides.
-- Real controllers, reconnecting in the middle of a mission, and testing by real players.
+- Nepal 4 (Mysterio) and Transylvania 3 crash on both games; Transylvania 4 (Venom) not reached yet.
+- Whole missions played start to finish by real players on two PCs (so far: the first Tokyo mission).
+- Saving the shared campaign from both sides, real controllers, and reconnecting in the middle of a mission.
 
 The [score breakdown](docs/STATUS.md#progress-estimate) and [roadmap](docs/ROADMAP.md) explain what remains.
 
