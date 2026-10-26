@@ -6,6 +6,12 @@ Two friends, two Windows game instances, and an independent English or Russian l
 
 **Beta · active development.** Player builds are on the [Releases](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases) page (the newest is v1.0.1-beta; expect some bugs). No game files or Steam libraries are distributed here: you need your own copy of the game. The launcher's play mode uses the native campaign route; the bounded Tokyo scenario remains for automated connection checks.
 
+## Unreleased research: joining an active mission
+
+Source now includes research-gated mid-mission joining that keeps the host in the current area. The incoming game replays recorded mission inputs, verifies state, and takes control of the existing companion after a synchronization pause. English/Russian loopback tests passed both a first join into solo play (1,904 matching frames afterward) and a reconnect (1,866 matching frames afterward), with clean exits and no host area restart.
+
+This feature is **not in the v1.0.1-beta download**. Later areas/bosses, connection and cancellation cases, and player packaging remain unfinished. See [status and remaining work](docs/STATUS.md#unreleased-mid-mission-joining) and [research test commands](docs/TESTING.md#unreleased-live-mission-admission).
+
 ## Current state (2026-10-26, v1.0.1-beta)
 
 The campaign route runs end to end in automated tests: New Game or Continue on the host, the Helicarrier hub, the mission computer, missions and the return to the hub. A test runner that shortens each mission to its ending played **the whole campaign, all 20 missions, in one co-op run** (60,000 frames, Tokyo 1 to the final Venom fight), with all seven bosses (Doc Ock, Green Goblin, Sandman, Scorpion, Rhino, Mysterio, Venom); level exits, boss intro cutscenes, results screens and the recorded progress were identical on both games after every mission. Most regions were also checked over a simulated bad connection (240 ms round trip, jitter, a 600 ms freeze every 10 s). Two crashes that are in the game's own code are repaired at start-up by the add-on, only when the exact broken bytes are present: Mysterio's laser (its code was overwritten by an old no-CD loader stub in this Game.exe build) and an empty draw-list entry in Transylvania 3.

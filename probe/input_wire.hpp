@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace coop {
 using Actions = std::array<float,28>;
@@ -13,6 +14,7 @@ constexpr std::uint32_t menuPointerActive=1,menuPointerClick=2;
 struct MenuPointer {std::uint32_t x,y,flags;};
 static_assert(sizeof(MenuPointer)==12,"menu pointer size");
 constexpr std::uint32_t phaseMenu=1,phaseLoad=2,phaseReady=1,phaseConfirmed=2;
+constexpr std::uint32_t blobChunkBytes=16384,blobMaxBytes=64u*1024u*1024u;
 // Fixed-size menu/load metadata. Digests, IDs, selection and auxiliary values are
 // opaque: the game layer must compare their meaning before acting on a choice.
 struct PhaseState {
@@ -50,6 +52,12 @@ public:
     // TryReceivePhase returns 1 with the peer's state, 0 while it has not arrived, -1 when the link failed or stopped.
     bool SendPhase(std::uint32_t sequence,const PhaseState& local);
     int TryReceivePhase(std::uint32_t sequence,PhaseState& remote);
+    // Reliable ordered bulk transfer, independent from frame and phase sequence spaces.
+    // IDs start at zero. Empty/oversize sends fail. Receive returns 1 when the complete
+    // blob is verified, 0 while pending, and -1 after stop/failure. Output is unchanged
+    // unless a complete verified blob is delivered.
+    bool SendBlob(std::uint32_t id,const std::vector<std::uint8_t>& bytes);
+    int TryReceiveBlob(std::uint32_t id,std::vector<std::uint8_t>& bytes);
     bool Finish();
     // Ordered user cancellation, distinct from finite-test completion and failure.
     // Safe alongside a blocked Step; Close/Open still require external ownership.

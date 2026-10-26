@@ -53,6 +53,9 @@ ROW = re.compile(
     r"slots=0,1 input=([0-9a-f]{8},[0-9a-f]{8}) "
     r"world=(\d+),([0-9a-f]{8}) progress=([0-9a-f]{8}) area=([0-9a-f]{8})$"
 )
+ROW_PAIRED = re.compile(ROW.pattern.replace("slots=0,1", r"slots=(?:0,1|1,0)"), re.M)
+ROW_NATIVE_AI = re.compile(
+    ROW.pattern.replace("slots=0,1", r"slots=(?:0,1|1,0|0,-1|-1,0)"), re.M)
 FAILURE = re.compile(r"NET FAIL|EXCEPTION|FAIL closed|TIMEOUT:", re.I)
 FIXTURE = re.compile(r"KEYBOARD_FIXTURE|DISCONNECT_NEUTRAL|MUTATION_FIXTURE|TRANSITION PARTY_INSIDE|JITTER_FIXTURE|PAUSE_FIXTURE|PAUSE ASSERT")
 
@@ -118,7 +121,7 @@ def no_reparse(path, new=False):
     return path
 
 
-def environment(source, seat, diagnostics=True, campaign=False, deferred=False, profile=None, hub_spawn=-1, skip_nis=False, auto_together=True, net_port="49375", tutorial_ui=False, slot_fixture=None, overwrite_no=False):
+def environment(source, seat, diagnostics=True, campaign=False, deferred=False, profile=None, hub_spawn=-1, skip_nis=False, auto_together=True, net_port="49375", tutorial_ui=False, slot_fixture=None, overwrite_no=False, live_join=False, wait_link=False):
     env = {key: value for key, value in source.items() if not key.upper().startswith("COOP_PROBE_")}
     values = {
         "AUTOTEST": "ExecutionPath", "INPUTBOT": "0", "PLAYBOT": "0", "ACTIONBOT": "0",
@@ -162,6 +165,8 @@ def environment(source, seat, diagnostics=True, campaign=False, deferred=False, 
             values["HUB_SPAWN"] = str(hub_spawn)
         if skip_nis:
             values["SKIP_NIS"] = "1"
+        if source.get("FOF_RESEARCH_LIVE_RECORD_TEST") == "1":
+            values["LIVE_RECORD_TEST"] = "1"
         if os.environ.get("FOF_RESEARCH_HUB_SOUND") == "0":
             values["HUB_PARTNER_SOUND"] = "0"
         if os.environ.get("FOF_RESEARCH_SIDEKICK_TEST") == "1":
@@ -172,6 +177,12 @@ def environment(source, seat, diagnostics=True, campaign=False, deferred=False, 
             values["BUILTIN_US_KEYS"] = "1"
         if os.environ.get("FOF_RESEARCH_WAIT_TEXT"):
             values["WAIT_TEXT"] = os.environ["FOF_RESEARCH_WAIT_TEXT"]
+    if live_join:
+        values["LIVE_JOIN_TEST"] = "1"
+    if wait_link:
+        if not campaign or not deferred:
+            raise Failed("Wait-link mode requires a deferred campaign peer")
+        values["HOST_WAIT_LINK"] = "1"
     if tutorial_ui:
         if not campaign or any(key in values for key in ("LEVEL_END_TEST", "HUB_JUMP_TEST", "NIS_GATE_TEST", "HOST_WAIT_LINK", "HOST_CONTINUE", "HUB_SPAWN", "HUB_SIDEKICK_TEST")):
             raise Failed("Tutorial UI regression requires the fresh retail first-area route")
@@ -348,17 +359,20 @@ def text(path):
     return value[:value.rfind("\n") + 1]
 
 
-def rows(value, stride=1):
+def rows(value, stride=1, *, allow_nonzero_start=False, allow_native_ai=False,
+         allow_swapped_slots=False):
     found = {}
-    previous = -stride
+    previous = None if allow_nonzero_start else -stride
+    row_pattern = ROW_NATIVE_AI if allow_native_ai else ROW_PAIRED if allow_swapped_slots else ROW
     for line in value.splitlines():
         if not line.startswith("NET state "):
             continue
-        match = ROW.fullmatch(line)
+        match = row_pattern.fullmatch(line)
         if not match:
             raise Failed("Malformed state row (requires progress, area and logical slots0,1): " + line[:180])
         tick = int(match[1])
-        if tick != previous + stride or tick > 0xffffffff:
+        expected = tick if previous is None else previous + stride
+        if tick != expected or tick > 0xffffffff:
             raise Failed("Missing, duplicated or out-of-order state tick: " + str(tick))
         if int(match[6]) < 2:
             raise Failed("State row does not contain both party actors")
@@ -371,6 +385,12 @@ def rows(value, stride=1):
     return found
 
 
+def require_paired_rows(rows_by_tick, minimum_tick):
+    checked = [line for tick, line in rows_by_tick.items() if tick >= minimum_tick]
+    if not checked or any(ROW_PAIRED.fullmatch(line) is None for line in checked):
+        raise Failed("State after LIVE_JOIN COMPLETE must contain both logical party slots")
+
+
 def compare(first, second, stride=1):
     common = sorted(set(first) & set(second))
     if common != list(range(0, len(common) * stride, stride)):
@@ -379,6 +399,56 @@ def compare(first, second, stride=1):
         if first[tick] != second[tick]:
             raise Failed("Paired state differs at common tick " + str(tick))
     return common[-1] + 1 if common else 0
+
+
+def compare_suffix(first, second, stride=1, minimum_tick=None):
+    """Compare a shared post-rejoin suffix while retaining its absolute ticks."""
+    common = sorted(set(first) & set(second))
+    if minimum_tick is not None:
+        common = [tick for tick in common if tick >= minimum_tick]
+    if common and common != list(range(common[0], common[0] + len(common) * stride, stride)):
+        raise Failed("Common post-rejoin samples are not consecutive at their absolute ticks")
+    for tick in common:
+        if minimum_tick is not None and any(
+                " slots=0,1 " not in row and " slots=1,0 " not in row
+                for row in (first[tick], second[tick])):
+            raise Failed("Post-admission state still contains an AI controller at tick " + str(tick))
+        if first[tick] != second[tick]:
+            raise Failed("Paired post-rejoin state differs at absolute tick " + str(tick))
+    base_tick = minimum_tick if minimum_tick is not None else common[0] if common else 0
+    return max(0, common[-1] - base_tick + 1) if common else 0
+
+
+def live_join_complete_tick(host_log, replacement_log, *, required=True, require_drop=True):
+    """Validate explicit in-mission handoff evidence without accepting a hub resume."""
+    marker = re.compile(r"^LIVE_JOIN COMPLETE tick=(\d+) preserved=1$", re.M)
+    if require_drop:
+        host_parts = host_log.rsplit("NET PARTNER_LOST", 1)
+        if len(host_parts) != 2:
+            if required:
+                raise Failed("Host log lacks NET PARTNER_LOST for the live join")
+            return None
+        host_after_join = host_parts[1]
+    else:
+        frozen = list(re.finditer(r"^LIVE_JOIN FROZEN(?: .*)?$", host_log, re.M))
+        if len(frozen) != 1:
+            if required:
+                raise Failed("Initial live join requires one LIVE_JOIN FROZEN marker")
+            return None
+        host_after_join = host_log[frozen[0].end():]
+    host_ticks = marker.findall(host_after_join)
+    replacement_ticks = marker.findall(replacement_log)
+    if not host_ticks or not replacement_ticks:
+        if required:
+            raise Failed("Host and replacement must both report LIVE_JOIN COMPLETE")
+        return None
+    if len(host_ticks) != 1 or len(replacement_ticks) != 1 or host_ticks[0] != replacement_ticks[0]:
+        raise Failed("Host/replacement LIVE_JOIN COMPLETE ticks must match exactly once")
+    if int(host_ticks[0]) == 0:
+        raise Failed("Live join completion reset the host mission tick to zero")
+    if re.search(r"JOIN_IN_MISSION|Helicarrier|resume=1|MISSION_COMMIT", host_after_join, re.I):
+        raise Failed("Host attempted the old Helicarrier mission-resume path after disconnect")
+    return int(host_ticks[0])
 
 
 class Win32:
@@ -499,6 +569,9 @@ def run(args):
     if args.tutorial_ui:
         summary["scope"] = "First retail mission tutorial ownership regression, native campaign bot over loopback; no physical-input or WAN claim."
         summary["tutorial_ui"] = {"complete": False, "ticks": []}
+    if args.live_join:
+        summary["scope"] = "Native in-mission reconnect preservation over loopback; requires matching host/replacement handoff markers and absolute-tick state suffix."
+        summary["live_join"] = {"complete_tick": None, "host_tick_continued": False}
     slot_test = args.slot_fixture is not None
     negative_slot = slot_test and (args.overwrite_no or len(args.seed_peer_slots) == 3 or args.stop_at_overwrite)
     if slot_test:
@@ -600,7 +673,9 @@ def run(args):
                 launcher_logs[i], environment(os.environ, seat, not args.quiet, args.campaign, args.deferred_connect > 0 or args.join_at_hub,
                             slot_profiles[i] if slot_test else host_profile if (args.join_at_hub or args.together) and seat == "host" else None, args.hub_spawn,
                             args.skip_cutscenes == "both" or (args.skip_cutscenes == "host" and seat == "host"),
-                            not args.no_auto_together, "49375" if seat == "host" else peer_port, args.tutorial_ui, args.slot_fixture, args.overwrite_no), seat + "-launcher")
+                            not args.no_auto_together, "49375" if seat == "host" else peer_port, args.tutorial_ui, args.slot_fixture, args.overwrite_no,
+                            live_join=args.live_join,
+                            wait_link=args.live_first_join and seat == "peer"), seat + "-launcher")
             launchers.append(process)
             lane.register_launcher(process)
         last_report = 0
@@ -632,9 +707,16 @@ def run(args):
                 if games[i] is not None and api.exit(games[i]) is not None and not dropped:
                     raise Failed(seat + ": game exited before requested close")
                 outputs.append(probe_text)
-                # After a drop in a mission the host's tick counter restarts: compare only the new session.
-                rows_text = probe_text.rsplit("NET PARTNER_LOST", 1)[-1] if args.rejoin_in_mission and i == 0 and rejoin_stage >= 2 else probe_text
-                parsed.append(rows(rows_text, 120 if args.quiet else 1))
+                stride = 120 if args.quiet else 1
+                if args.live_join:
+                    # The replacement can begin at the host's existing mission tick.
+                    parsed.append(rows(probe_text, stride, allow_nonzero_start=i==1, allow_native_ai=True))
+                else:
+                    # For live join, parsing the entire host log also rejects a zero/reset tick after disconnect.
+                    rows_text = (probe_text.rsplit("NET PARTNER_LOST", 1)[-1]
+                                 if args.rejoin_in_mission and not args.live_join and
+                                 i == 0 and rejoin_stage >= 2 else probe_text)
+                    parsed.append(rows(rows_text, stride))
             if args.rejoin and rejoin_stage == 0 and connected and "CAMPAIGN ASSERT JOIN_COMPLETE" in outputs[1]:
                 # Both in the hub after the first join: the joiner leaves; the host must keep playing alone.
                 if api.close_windows([games[1]]).get(games[1]["pid"], 0) < 1:
@@ -655,11 +737,19 @@ def run(args):
                 games[1] = None
                 launchers[1] = popen([str(ROOT / "probe" / "native-launcher.exe"), "--play",
                     str(ROOT / "test" / LANGUAGES[1].lower() / "Game.exe"), str(boxes[1])],
-                    launcher_logs[1], environment(os.environ, "peer", not args.quiet, args.campaign, True, None, skip_nis=args.skip_cutscenes == "both", auto_together=not args.no_auto_together, net_port=peer_port), "peer2-launcher")
+                    launcher_logs[1], environment(os.environ, "peer", not args.quiet, args.campaign, True, None,
+                        skip_nis=args.skip_cutscenes == "both", auto_together=not args.no_auto_together,
+                        net_port=peer_port, live_join=args.live_join), "peer2-launcher")
                 lane.register_launcher(launchers[1])
                 connected, rejoin_stage = False, 2
                 event("HOST_CONTINUED_ALONE_REPLACEMENT_PEER_STARTED")
-            if args.join_at_hub and not connected and all(games):
+            host_solo_frames = max(parsed[0]) + 1 if parsed[0] else 0
+            host_in_canonical_mission = bool(re.search(
+                r"^CAMPAIGN ASSERT GAMEPLAY path=Tokyo/1_Level/1_Area area=\d+ flow=128 sidekick=\d+ prepared=1$",
+                outputs[0], re.M))
+            first_join_ready = (not args.live_first_join or
+                                (host_solo_frames >= 600 and host_in_canonical_mission))
+            if args.join_at_hub and not connected and all(games) and first_join_ready:
                 # Both linked at once; the host bot plays New Game alone and the joiner waits at its main menu.
                 for i, role in enumerate(("host", "join")):
                     temporary = boxes[i] / "connect.json.tmp"
@@ -668,7 +758,8 @@ def run(args):
                 connected = True
                 if rejoin_stage == 2:
                     rejoin_stage = 3
-                event("JOIN_AT_HUB_ROLES_WRITTEN", rejoin=rejoin_stage == 3)
+                event("LIVE_FIRST_JOIN_ROLES_WRITTEN" if args.live_first_join else "JOIN_AT_HUB_ROLES_WRITTEN",
+                      rejoin=rejoin_stage == 3, host_solo_frames=host_solo_frames if args.live_first_join else None)
             if args.deferred_connect and not connected:
                 if any(re.search(r"^NET (?:opening|READY)", output, re.M) for output in outputs):
                     raise Failed("A deferred game connected before its role was written")
@@ -681,7 +772,17 @@ def run(args):
                             os.replace(temporary, boxes[i] / "connect.json")
                         connected = True
                         event("DEFERRED_CONNECT_WRITTEN", waited_seconds=round(time.monotonic() - frozen_since, 1))
-            common = compare(*parsed, stride=120 if args.quiet else 1)
+            stride = 120 if args.quiet else 1
+            if args.live_first_join and connected or args.live_join and rejoin_stage >= 2:
+                complete_tick = live_join_complete_tick(
+                    outputs[0], outputs[1], required=False, require_drop=not args.live_first_join)
+                common = (compare_suffix(parsed[0], parsed[1], stride, complete_tick)
+                          if complete_tick is not None else 0)
+                if complete_tick is not None and summary["live_join"]["complete_tick"] is None:
+                    summary["live_join"]["complete_tick"] = complete_tick
+                    event("LIVE_JOIN_PRESERVED", tick=complete_tick)
+            else:
+                common = compare(*parsed, stride=stride)
             summary["logged_common_samples"] = len(set(parsed[0]) & set(parsed[1]))
             summary["common_frames"] = common
             if slot_test:
@@ -696,7 +797,15 @@ def run(args):
                     event("NEGATIVE_SLOT_OUTCOME_CONFIRMED", outcome=summary["slot_fixture"]["outcome"])
                     break
             ready = [bool(re.search(r"^NET READY role=" + str(i + 1) + r"$", outputs[i], re.M)) for i in range(2)]
-            resumed = not args.rejoin_in_mission or (rejoin_stage == 3 and "MISSION_COMMIT" in outputs[1] and "resume=1" in outputs[1])
+            if args.live_first_join:
+                resumed = (connected and live_join_complete_tick(
+                    outputs[0], outputs[1], required=False, require_drop=False) is not None)
+            elif args.live_join:
+                resumed = (rejoin_stage == 3 and
+                           live_join_complete_tick(outputs[0], outputs[1], required=False,
+                                                   require_drop=True) is not None)
+            else:
+                resumed = not args.rejoin_in_mission or (rejoin_stage == 3 and "MISSION_COMMIT" in outputs[1] and "resume=1" in outputs[1])
             tutorial_ready = True
             if args.tutorial_ui:
                 summary["tutorial_ui"] = tutorial_ui_evidence(outputs)
@@ -729,9 +838,38 @@ def run(args):
             if exits != [(str(games[i]["pid"]), "0")] or launchers[i].returncode != 0 or summary["game_exitcodes"][i] != 0:
                 raise Failed(seat + ": need matching PROCESS_EXIT=0, retained game exit0 and launcher exit0")
         final_logs = [text(box / "probe.log") for box in boxes]
-        if args.rejoin_in_mission:
+        if args.rejoin_in_mission and not args.live_join:
             final_logs[0] = final_logs[0].rsplit("NET PARTNER_LOST", 1)[-1]  # the host's new session after the drop
-        summary["common_frames"] = compare(*(rows(value, 120 if args.quiet else 1) for value in final_logs), stride=120 if args.quiet else 1)
+        stride = 120 if args.quiet else 1
+        if args.live_join:
+            live_tick = live_join_complete_tick(final_logs[0], final_logs[1], required=True,
+                                                require_drop=not args.live_first_join)
+            host_full_rows = rows(final_logs[0], stride, allow_native_ai=True)
+            if args.live_first_join:
+                frozen = list(re.finditer(r"^LIVE_JOIN FROZEN(?: .*)?$", final_logs[0], re.M))
+                if len(frozen) != 1:
+                    raise Failed("Initial live join requires exactly one LIVE_JOIN FROZEN marker")
+                host_after_join = final_logs[0][frozen[0].end():]
+                host_after_rows = rows(host_after_join, stride, allow_nonzero_start=True, allow_native_ai=True)
+                if not host_full_rows or not host_after_rows or max(host_full_rows) < live_tick:
+                    raise Failed("Initial live-join host mission timeline did not continue through completion")
+                host_suffix_rows = {tick: line for tick, line in host_full_rows.items() if tick >= live_tick}
+            else:
+                host_parts = final_logs[0].rsplit("NET PARTNER_LOST", 1)
+                if len(host_parts) != 2:
+                    raise Failed("Live-join host log lacks its disconnect boundary")
+                host_before_rows = rows(host_parts[0], stride, allow_native_ai=True)
+                host_after_rows = rows(host_parts[1], stride, allow_nonzero_start=True, allow_native_ai=True)
+                if (not host_before_rows or not host_after_rows or
+                        min(host_after_rows) <= max(host_before_rows) or
+                        max(host_full_rows) < live_tick):
+                    raise Failed("Host mission ticks did not continue through live join")
+                host_suffix_rows = host_after_rows
+            replacement_rows = rows(final_logs[1], stride, allow_nonzero_start=True, allow_native_ai=True)
+            summary["live_join"] = {"complete_tick": live_tick, "host_tick_continued": True}
+            summary["common_frames"] = compare_suffix(host_suffix_rows, replacement_rows, stride, live_tick)
+        else:
+            summary["common_frames"] = compare(*(rows(value, stride) for value in final_logs), stride=stride)
         if not negative_slot and summary["common_frames"] < args.frames:
             raise Failed("Final common sample count regressed")
         if slot_test:
@@ -842,6 +980,20 @@ def run(args):
 def selftest():
     row = "NET state tick=0 rng=12345678 pos0=00000000,00000000,00000000 pos1=00000000,00000000,00000000 slots=0,1 input=00000000,00000000 world=2,12345678 progress=11112222 area=33334444"
     assert compare(rows(row), rows(row)) == 1
+    ai_row = row.replace("slots=0,1", "slots=0,-1")
+    assert rows(ai_row, allow_native_ai=True)[0] == ai_row
+    try:
+        rows(ai_row)
+    except Failed:
+        pass
+    else:
+        raise AssertionError("Default parser accepted native AI")
+    try:
+        compare_suffix(rows(ai_row, allow_native_ai=True), rows(ai_row, allow_native_ai=True), minimum_tick=0)
+    except Failed:
+        pass
+    else:
+        raise AssertionError("Post-admission parser accepted native AI")
     for invalid in (row + "\n" + row, row.replace("tick=0", "tick=2"), row.replace("slots=0,1", "slots=1,1"),
                     row.replace("00000000,00000000,00000000", "7fc00000,00000000,00000000", 1),
                     row.replace(" progress=11112222 area=33334444", "")):
@@ -863,6 +1015,15 @@ def selftest():
     assert env["COOP_PROBE_NET_MODE"] == "join" and env["COOP_PROBE_INPUTBOT"] == "0"
     sparse = "\n".join(row.replace("tick=0", "tick=" + str(tick)) for tick in (0, 120, 240, 360))
     assert compare(rows(sparse, 120), rows(sparse, 120), 120) == 361
+    absolute = "\n".join(row.replace("tick=0", "tick=" + str(tick)) for tick in (600, 720))
+    assert list(rows(absolute, 120, allow_nonzero_start=True)) == [600, 720]
+    assert compare_suffix({600: row, 720: row}, {600: row, 720: row}, 120, 600) == 121
+    try:
+        rows(absolute + "\n" + row, 120, allow_nonzero_start=True)
+    except Failed:
+        pass
+    else:
+        raise AssertionError("Reset tick after an absolute post-rejoin sequence accepted")
     try:
         rows(sparse.replace("tick=240", "tick=360"), 120)
     except Failed:
@@ -874,6 +1035,35 @@ def selftest():
     assert campaign["COOP_PROBE_CAMPAIGN"] == "1" and campaign["COOP_PROBE_CAMPAIGN_FIXTURE"] == "1"
     assert "COOP_PROBE_AUTOTEST" not in campaign and "COOP_PROBE_AREA" not in campaign
     assert environment({}, "host", True, True, True)["COOP_PROBE_NET_MODE"] == "deferred"
+    live_host = environment({}, "host", campaign=True, live_join=True)
+    live_replacement = environment({}, "peer", campaign=True, deferred=True, live_join=True)
+    first_host = environment({}, "host", campaign=True, deferred=True, live_join=True)
+    first_peer = environment({}, "peer", campaign=True, deferred=True, live_join=True, wait_link=True)
+    assert live_host["COOP_PROBE_LIVE_JOIN_TEST"] == "1"
+    assert live_replacement["COOP_PROBE_LIVE_JOIN_TEST"] == "1"
+    assert first_host["COOP_PROBE_LIVE_JOIN_TEST"] == "1" and "COOP_PROBE_HOST_WAIT_LINK" not in first_host
+    assert first_peer["COOP_PROBE_LIVE_JOIN_TEST"] == "1" and first_peer["COOP_PROBE_HOST_WAIT_LINK"] == "1"
+    valid_live_host = "NET state tick=0\nNET PARTNER_LOST\nLIVE_JOIN COMPLETE tick=600 preserved=1\n"
+    valid_live_peer = "LIVE_JOIN COMPLETE tick=600 preserved=1\n"
+    assert live_join_complete_tick(valid_live_host, valid_live_peer) == 600
+    initial_live_host = ("LIVE_JOIN FROZEN tick=600\n"
+                         "NET state tick=600\nLIVE_JOIN COMPLETE tick=601 preserved=1\n")
+    initial_live_peer = "LIVE_JOIN COMPLETE tick=601 preserved=1\n"
+    assert live_join_complete_tick(initial_live_host, initial_live_peer, require_drop=False) == 601
+    for host_log, peer_log in (
+            (valid_live_host.replace("tick=600", "tick=0"), valid_live_peer.replace("tick=600", "tick=0")),
+            (valid_live_host, valid_live_peer.replace("tick=600", "tick=601")),
+            (valid_live_host + "JOIN_IN_MISSION resume=1\n", valid_live_peer),
+            (initial_live_host.replace("LIVE_JOIN FROZEN tick=600\n", ""),
+             initial_live_peer),
+            (initial_live_host + "CAMPAIGN ASSERT MISSION_COMMIT resume=1\n", initial_live_peer)):
+        try:
+            initial = "LIVE_JOIN FROZEN" in host_log
+            live_join_complete_tick(host_log, peer_log, require_drop=not initial)
+        except Failed:
+            pass
+        else:
+            raise AssertionError("Invalid live-join preservation evidence accepted")
     tutorial = environment({"COOP_PROBE_LEVEL_END_TEST": "1"}, "peer", campaign=True, tutorial_ui=True)
     assert tutorial["COOP_PROBE_TUTORIAL_UI_TEST"] == "1" and "COOP_PROBE_LEVEL_END_TEST" not in tutorial
     prefix = ("CAMPAIGN ASSERT NEW_GAME operation=0 selection=0\n"
@@ -1025,6 +1215,10 @@ def selftest():
             assert main(used + ["--overwrite-no"]) == 0 and seen[-1].overwrite_no
             assert main(used + ["--stop-at-overwrite"]) == 0 and seen[-1].stop_at_overwrite
             assert main(used + ["--seed-peer-slots", "0,1,2"]) == 0 and seen[-1].seed_peer_slots == (0, 1, 2)
+            live_base = ["--campaign", "--join-at-hub", "--rejoin-in-mission", "--live-join"]
+            assert main(live_base) == 0 and seen[-1].live_join
+            first_join_args = ["--campaign", "--join-at-hub", "--live-first-join"]
+            assert main(first_join_args) == 0 and seen[-1].live_first_join and seen[-1].live_join
             invalid = [
                 ["--slot-fixture", "0"], base + ["--overwrite-no"],
                 base + ["--slot-fixture", "0", "--seed-host-slots", "0"],
@@ -1034,6 +1228,11 @@ def selftest():
                 base + ["--slot-fixture", "0", "--tutorial-ui", "--frames", "600"],
                 used + ["--stop-at-overwrite", "--overwrite-no"],
                 used + ["--stop-at-overwrite", "--seed-peer-slots", "0,1,2"],
+                ["--live-join"], ["--campaign", "--live-join"],
+                ["--campaign", "--join-at-hub", "--live-join"],
+                ["--live-first-join"], ["--campaign", "--live-first-join"],
+                ["--campaign", "--join-at-hub", "--live-first-join", "--rejoin"],
+                ["--campaign", "--join-at-hub", "--live-first-join", "--rejoin-in-mission"],
             ]
             for command in invalid:
                 before_calls = len(seen)
@@ -1052,7 +1251,7 @@ def selftest():
                     assert exc.code == 2
                 else:
                     raise AssertionError("Inherited alternate route accepted for slot regression")
-    print("OWN_PLAY_LIFECYCLE_SELFTEST_PASS rows/environment/quiet/tutorial+10negative/slot4positive+11negative/phase-stop+8negative/seed7negative+retarget+inventory/CLI5positive+10negative")
+    print("OWN_PLAY_LIFECYCLE_SELFTEST_PASS rows/environment/quiet/live-join+first-join+absolute-ticks/tutorial+10negative/slot4positive+11negative/phase-stop+8negative/seed7negative+retarget+inventory/CLI5positive+10negative")
     return 0
 
 
@@ -1073,6 +1272,10 @@ def main(argv=None):
                         help="With --campaign: host plays New Game alone to the hub, then the joiner catches up and both play on")
     parser.add_argument("--rejoin-in-mission", action="store_true",
                         help="With --join-at-hub: both play into a mission, the joiner closes its game there; a new joiner joins while the host is still in the mission and both resume at the host's area")
+    parser.add_argument("--live-join", action="store_true",
+                        help="With --campaign --join-at-hub --rejoin-in-mission: require a preserved in-mission join without returning the host to the Helicarrier")
+    parser.add_argument("--live-first-join", action="store_true",
+                        help="With --campaign --join-at-hub: host starts alone in the mission, then waits for the first peer to join without reloading the host area")
     parser.add_argument("--rejoin", action="store_true",
                         help="With --join-at-hub: after the first join the joiner closes its game; the host keeps playing and a new joiner rejoins at the hub")
     parser.add_argument("--skip-cutscenes", nargs="?", const="both", choices=("both", "host"), default=None,
@@ -1113,6 +1316,12 @@ def main(argv=None):
         parser.error("--seed-save requires --together or --join-at-hub and an existing file")
     if args.rejoin_in_mission and (args.rejoin or not args.join_at_hub):
         parser.error("--rejoin-in-mission requires --join-at-hub and excludes --rejoin")
+    if args.live_first_join and (not args.campaign or not args.join_at_hub or args.rejoin or args.rejoin_in_mission):
+        parser.error("--live-first-join requires --campaign --join-at-hub and excludes --rejoin/--rejoin-in-mission")
+    if args.live_first_join:
+        args.live_join = True
+    elif args.live_join and (not args.campaign or not args.join_at_hub or not args.rejoin_in_mission):
+        parser.error("--live-join requires --campaign --join-at-hub --rejoin-in-mission")
     if args.rejoin and not args.join_at_hub:
         parser.error("--rejoin requires --join-at-hub")
     if args.join_at_hub and (not args.campaign or args.deferred_connect):

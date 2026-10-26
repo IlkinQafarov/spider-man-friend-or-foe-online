@@ -4,7 +4,25 @@ Game QA uses bots and bounded cases. Do not substitute a request for someone to 
 
 Commands below are source entrypoints, checked against the repository. They are not a claim that all commands were rerun for this documentation change. The [status snapshot](STATUS.md) records completed checkpoints and their limits.
 
-The current player pre-release is **v1.0.1-beta**. Commands below target the **scenario-12 / protocol-5 source**; historical results remain tied to their original build. Both test peers must use matching source/builds; older protocols are rejected. Historical scenario-5/10/11 passes remain attached to their original builds.
+The current player pre-release is **v1.0.1-beta**, using scenario 12 / protocol 5. Unreleased research source now uses **protocol 6**, which adds bounded history transfer. Both test peers must use matching builds. Historical results remain tied to their original build; this source is not a new player release.
+
+## Unreleased live mission admission
+
+The research build can reconstruct a joining client's mission from recorded effective inputs, check every recorded state sample, and resume at the host's current tick. The host waits in place; it does not return to the hub or restart an area. Native AI/player transitions preserve existing actors, positions, health and area identity. These paths remain behind research flags while coverage is extended.
+
+```powershell
+cmd /c probe\build-live-join-selftest.cmd
+python -I qa/live_join_replay.py --selftest
+python -I launcher/play_lifecycle.py --selftest
+python -I launcher/play_lifecycle.py --name live-rejoin-check --campaign --join-at-hub --rejoin-in-mission --live-join --skip-cutscenes both --seconds 900 --frames 1800 --quiet
+python -I launcher/play_lifecycle.py --name live-first-check --campaign --join-at-hub --live-first-join --skip-cutscenes both --seconds 900 --frames 1800 --quiet
+```
+
+Use fresh names. The reconnect fixture closes its initial peer during the mission and launches a fresh replacement. The first-join fixture lets the host complete at least 600 solo frames before connecting the friend. Both require matching completion ticks, a continuing host timeline, no host hub/restart path, matching states after admission and clean exits. Only pre-admission history may contain AI controllers; compared post-admission frames require two human controllers.
+
+Recorded reconnect check **522 passed** in English/Russian over loopback: admission at tick 655, 1,866 matching post-admission frames, both game and launcher exits 0. This establishes the first Tokyo area case, not later areas, bosses, arbitrary pause/cutscene joins, real controllers or a two-PC Steam run. Fresh paired/solo histories and AI/player transition replay checks also passed; altered state records were rejected. See [status](STATUS.md) for release boundaries.
+
+First-arrival check **524 passed** over English/Russian loopback: the host played solo with native AI before the friend linked, admission completed at tick 857, then both games matched for 1,904 frames. Both game and launcher exits were 0. This uses the same first-area coverage limit.
 
 ## Own-code checks, without the game or an account
 

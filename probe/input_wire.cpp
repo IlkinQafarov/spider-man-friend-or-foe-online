@@ -6,26 +6,33 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <condition_variable>
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <new>
 #include <thread>
 #pragma comment(lib,"ws2_32.lib")
 
 namespace coop {
 namespace {
-constexpr std::uint32_t helloMagic=0x314f4f43,frameMagic=0x314d5246,finishMagic=0x314e4946,stopMagic=0x31504f53,phaseMagic=0x31534850;
+constexpr std::uint32_t helloMagic=0x314f4f43,frameMagic=0x314d5246,finishMagic=0x314e4946,stopMagic=0x31504f53,phaseMagic=0x31534850,blobMagic=0x31424c42;
+constexpr std::uint32_t blobHeaderVersion=1,blobQueueLimit=2;
 struct Hello {std::uint32_t magic,version,role,delay;Digest build,scenario;};
 struct Frame {std::uint32_t magic,tick;Actions actions;std::uint64_t state;MenuPointer pointer;std::uint32_t reserved;};
 struct PhasePacket {std::uint32_t magic,sequence;PhaseState state;std::uint64_t reserved;};
+struct BlobHeader {std::uint32_t magic,version,reserved,id,total,offset,length,checksum,headerChecksum;};
 static_assert(sizeof(Hello)==80,"wire hello size");
 static_assert(sizeof(Frame)==144,"wire frame size");
 static_assert(sizeof(PhasePacket)==128,"wire phase packet size");
+static_assert(sizeof(BlobHeader)==36,"wire blob header size");
 bool valid(const Actions& actions){for(float value:actions)if(!std::isfinite(value)||value<0||value>1)return false;return true;}
 bool valid(const MenuPointer& pointer){return pointer.x<=65535&&pointer.y<=65535&&!(pointer.flags&~(menuPointerActive|menuPointerClick))&&
     ((pointer.flags&menuPointerActive)||(pointer.x==0&&pointer.y==0&&pointer.flags==0));}
 bool valid(const PhaseState& state){return (state.kind==phaseMenu||state.kind==phaseLoad)&&!(state.flags&~(phaseReady|phaseConfirmed));}
+std::uint32_t hashBytes(const std::uint8_t* bytes,std::size_t size){std::uint32_t hash=2166136261u;for(std::size_t i=0;i<size;i++)hash=(hash^bytes[i])*16777619u;return hash;}
+std::uint32_t blobHeaderHash(const BlobHeader& header){return hashBytes((const std::uint8_t*)&header,offsetof(BlobHeader,headerChecksum));}
 bool transfer(SOCKET socket,void* bytes,int count,bool sending){
     char* position=(char*)bytes;
     while(count){int done=sending?send(socket,position,count,0):recv(socket,position,count,0);if(done<=0)return false;position+=done;count-=done;}
@@ -38,12 +45,15 @@ struct InputWire::Impl {
     std::atomic<unsigned> delay{3};unsigned timeoutMs=15000;std::atomic<bool> framesSeen{false};
     std::uint32_t outgoing=0;
     std::uint32_t phaseOutgoing=0;
+    std::uint32_t blobOutgoing=0;
     std::atomic<std::uint32_t> consumed{0};
     std::atomic<std::uint32_t> phaseConsumed{0};
+    std::atomic<std::uint32_t> blobConsumed{0};
     std::atomic<bool> running{false};
     std::atomic<bool> localStopped{false},peerStopped{false};
     // Serialize the frame/marker bytes and outgoing sequence as one operation.
     std::mutex sendMutex;
+    std::mutex blobSendMutex,stopMutex;
     std::thread reader;
     mutable std::mutex errorMutex;
     std::string error;
@@ -51,39 +61,66 @@ struct InputWire::Impl {
     std::condition_variable ready;
     std::map<std::uint32_t,Frame> queue;
     std::map<std::uint32_t,PhaseState> phaseQueue;
+    std::map<std::uint32_t,std::vector<std::uint8_t>> blobQueue;
+    std::vector<std::uint8_t> partialBlob;
+    std::uint32_t partialBlobId=0,partialBlobOffset=0,partialBlobChecksum=0;
     std::atomic<bool> peerFinished{false},ownFinished{false};
     bool Fail(const char* message){
         {std::lock_guard<std::mutex> lock(errorMutex);if(error.empty())error=message;}
         {std::lock_guard<std::mutex> lock(queueMutex);running=false;}
         if(socket!=INVALID_SOCKET)shutdown(socket,SD_BOTH);ready.notify_all();return false;
     }
-    bool ReceiveBytes(void* destination,int remaining){
+    bool ReceiveBytes(void* destination,int remaining,bool cancelOnLocalStop=false){
         char* position=(char*)destination;
-        while(remaining&&running){
+        while(remaining&&running&&(!cancelOnLocalStop||!localStopped)&&!peerStopped){
             // A local Winsock shutdown need not release an already blocked recv
             // immediately. Poll readiness (no network traffic), then receive only
             // available bytes. Both idle and partial packets stay cancellable.
             fd_set readable;FD_ZERO(&readable);FD_SET(socket,&readable);timeval interval={0,100000};
             int available=select(0,&readable,0,0,&interval);if(available==SOCKET_ERROR)return false;
-            if(!available)continue;if(!running)return false;
+            if(!available)continue;if(!running||(cancelOnLocalStop&&localStopped)||peerStopped)return false;
             int received=recv(socket,position,remaining,0);if(received<=0)return false;
             position+=received;remaining-=received;
         }
         return remaining==0;
     }
-    bool ReceiveFrame(Frame& frame){
-        // Phase packets remain 128 bytes; input/terminal packets are 144. Read
-        // the discriminator first so adjacent mixed packet types never overlap.
-        if(!ReceiveBytes(&frame.magic,sizeof(frame.magic)))return false;
-        if(frame.magic!=phaseMagic&&frame.magic!=frameMagic&&frame.magic!=stopMagic&&frame.magic!=finishMagic)return false;
-        int size=frame.magic==phaseMagic?sizeof(PhasePacket):sizeof(Frame);
-        return ReceiveBytes((char*)&frame+sizeof(frame.magic),size-sizeof(frame.magic));
+    bool ReceiveBlob(std::uint32_t expectedId,bool& complete){
+        complete=false;
+        BlobHeader header={};header.magic=blobMagic;
+        if(!ReceiveBytes((char*)&header+sizeof(header.magic),sizeof(header)-sizeof(header.magic),true))return false;
+        const std::uint32_t remaining=header.total>=header.offset?header.total-header.offset:0;
+        const std::uint32_t expectedLength=remaining<blobChunkBytes?remaining:blobChunkBytes;
+        if(header.version!=blobHeaderVersion){Fail("Invalid blob version");return false;}
+        if(header.reserved){Fail("Invalid blob reserved field");return false;}
+        if(header.headerChecksum!=blobHeaderHash(header)){Fail("Invalid blob header checksum");return false;}
+        if(header.id!=expectedId){Fail("Invalid blob ID order");return false;}
+        if(header.total==0||header.total>blobMaxBytes||header.offset>header.total||header.length==0||header.length>blobChunkBytes||header.length!=expectedLength){Fail("Invalid blob size or chunk bounds");return false;}
+        if(header.offset==0){
+            bool full=false;{std::lock_guard<std::mutex> lock(queueMutex);full=blobQueue.size()>=blobQueueLimit;}
+            if(full){Fail("Blob queue limit exceeded");return false;}
+            if(!partialBlob.empty()){Fail("Overlapping blob transfer");return false;}
+            try{partialBlob.resize(header.total);}catch(...){Fail("Blob buffer allocation failed");return false;}
+            partialBlobId=header.id;partialBlobOffset=0;partialBlobChecksum=header.checksum;
+        }else if(partialBlob.size()!=header.total||header.id!=partialBlobId||header.offset!=partialBlobOffset||header.checksum!=partialBlobChecksum){Fail("Blob offset or transfer metadata mismatch");return false;}
+        if(!ReceiveBytes(partialBlob.data()+header.offset,(int)header.length,true))return false;
+        partialBlobOffset+=header.length;
+        if(header.offset+header.length==header.total){
+            if(hashBytes(partialBlob.data(),partialBlob.size())!=header.checksum){Fail("Blob checksum mismatch");return false;}
+            bool queued=false;try{{std::lock_guard<std::mutex> lock(queueMutex);if(blobQueue.size()<blobQueueLimit)queued=blobQueue.emplace(header.id,std::move(partialBlob)).second;}}catch(...){Fail("Blob queue allocation failed");return false;}
+            if(!queued){Fail("Blob queue limit or duplicate ID");return false;}
+            partialBlob.clear();partialBlobOffset=0;complete=true;ready.notify_all();return true;
+        }
+        return true;
     }
     void Read(){
         // The input delay may be set once before the first frame (SetDelay); read it when the first frame arrives.
-        std::uint32_t expected=~0u,phaseExpected=0;
+        std::uint32_t expected=~0u,phaseExpected=0,blobExpected=0;
         while(running){
-            Frame frame={};if(!ReceiveFrame(frame)){if(running&&!localStopped)Fail("Peer disconnected or receive failed");break;}
+            Frame frame={};if(!ReceiveBytes(&frame.magic,sizeof(frame.magic))){if(running&&!localStopped)Fail("Peer disconnected or receive failed");break;}
+            if(frame.magic==blobMagic){bool complete=false;if(!ReceiveBlob(blobExpected,complete)){if(running&&!localStopped&&!peerStopped)Fail("Peer disconnected during blob");break;}if(complete)++blobExpected;continue;}
+            if(frame.magic!=phaseMagic&&frame.magic!=frameMagic&&frame.magic!=stopMagic&&frame.magic!=finishMagic){Fail("Unknown packet type");break;}
+            int packetSize=frame.magic==phaseMagic?sizeof(PhasePacket):sizeof(Frame);
+            if(!ReceiveBytes((char*)&frame+sizeof(frame.magic),packetSize-sizeof(frame.magic))){if(running&&!localStopped)Fail("Peer disconnected or receive failed");break;}
             if(frame.magic==phaseMagic){
                 PhasePacket packet={};memcpy(&packet,&frame,sizeof(packet));
                 if(packet.reserved||!valid(packet.state)||packet.sequence>0xffffff00u||packet.sequence!=phaseExpected||
@@ -97,7 +134,7 @@ struct InputWire::Impl {
                 bool empty=frame.state==0&&frame.pointer.x==0&&frame.pointer.y==0&&frame.pointer.flags==0&&frame.reserved==0;for(float value:frame.actions)if(value!=0)empty=false;
                 if(frame.tick>0xffffff00u||frame.tick+delay!=expected||!empty){Fail("Invalid stop sequence or payload");break;}
                 {std::lock_guard<std::mutex> lock(queueMutex);peerStopped=true;}
-                ready.notify_all();return;
+                ready.notify_all();partialBlob.clear();partialBlobOffset=0;return;
             }
             if(frame.magic==finishMagic){
                 bool empty=frame.state==0&&frame.pointer.x==0&&frame.pointer.y==0&&frame.pointer.flags==0&&frame.reserved==0;for(float value:frame.actions)if(value!=0)empty=false;
@@ -109,6 +146,8 @@ struct InputWire::Impl {
             framesSeen=true;{std::lock_guard<std::mutex> lock(queueMutex);queue.emplace(frame.tick,frame);}
             ++expected;ready.notify_all();
         }
+        partialBlob.clear();partialBlobOffset=0;
+        {std::lock_guard<std::mutex> lock(queueMutex);blobQueue.clear();}
     }
 };
 InputWire::InputWire():impl(new Impl){}
@@ -153,9 +192,9 @@ bool InputWire::Open(bool host,const char* ipv4,std::uint16_t port,const Digest&
     setsockopt(impl->socket,IPPROTO_TCP,TCP_NODELAY,(char*)&noDelay,sizeof(noDelay));
     setsockopt(impl->socket,SOL_SOCKET,SO_RCVTIMEO,(char*)&timeout,sizeof(timeout));
     setsockopt(impl->socket,SOL_SOCKET,SO_SNDTIMEO,(char*)&timeout,sizeof(timeout));
-    Hello local={helloMagic,5,host?0u:1u,delay,build,scenario},peer={};
+    Hello local={helloMagic,6,host?0u:1u,delay,build,scenario},peer={};
     if(!transfer(impl->socket,&local,sizeof(local),true)||!transfer(impl->socket,&peer,sizeof(peer),false))return impl->Fail("Handshake transfer failed");
-    if(peer.magic!=helloMagic||peer.version!=5||peer.role==local.role||peer.role>1||peer.delay!=delay||peer.build!=build||peer.scenario!=scenario)return impl->Fail("Build, scenario, role, or protocol mismatch");
+    if(peer.magic!=helloMagic||peer.version!=6||peer.role==local.role||peer.role>1||peer.delay!=delay||peer.build!=build||peer.scenario!=scenario)return impl->Fail("Build, scenario, role, or protocol mismatch");
     // Movies/modal screens may produce no packets while no API is waiting.
     // API waits remain bounded and Fail/Close shuts down a stalled reader.
     DWORD idleReceive=0;if(setsockopt(impl->socket,SOL_SOCKET,SO_RCVTIMEO,(char*)&idleReceive,sizeof(idleReceive))==SOCKET_ERROR)return impl->Fail("Receive idle configuration failed");
@@ -220,6 +259,31 @@ int InputWire::TryReceivePhase(std::uint32_t sequence,PhaseState& remote){
     if(!impl->running||impl->localStopped||impl->peerStopped||impl->ownFinished||impl->peerFinished)return -1;
     return 0;
 }
+bool InputWire::SendBlob(std::uint32_t id,const std::vector<std::uint8_t>& bytes){
+    if(bytes.empty()||bytes.size()>blobMaxBytes)return false;
+    std::unique_lock<std::mutex> serial(impl->blobSendMutex);
+    if(!impl->running||impl->localStopped||impl->peerStopped||impl->ownFinished||impl->peerFinished)return false;
+    if(id!=impl->blobOutgoing||id>0xffffff00u)return impl->Fail("Invalid local blob sequence");
+    const std::uint32_t total=(std::uint32_t)bytes.size(),checksum=hashBytes(bytes.data(),bytes.size());
+    for(std::uint32_t offset=0;offset<total;){
+        const std::uint32_t remaining=total-offset,length=remaining<blobChunkBytes?remaining:blobChunkBytes;BlobHeader header={blobMagic,blobHeaderVersion,0,id,total,offset,length,checksum,0};header.headerChecksum=blobHeaderHash(header);
+        std::unique_lock<std::mutex> sending(impl->sendMutex);
+        if(impl->localStopped||impl->peerStopped||!impl->running)return false;
+        if(!transfer(impl->socket,&header,sizeof(header),true)||!transfer(impl->socket,(void*)(bytes.data()+offset),(int)length,true))return impl->Fail("Blob send failed");
+        sending.unlock();
+        offset+=length;
+        if(impl->localStopped||impl->peerStopped||!impl->running)return false;
+    }
+    ++impl->blobOutgoing;return true;
+}
+int InputWire::TryReceiveBlob(std::uint32_t id,std::vector<std::uint8_t>& bytes){
+    std::lock_guard<std::mutex> lock(impl->queueMutex);
+    if(id!=impl->blobConsumed.load())return -1;
+    auto found=impl->blobQueue.find(id);
+    if(found!=impl->blobQueue.end()&&impl->running&&!impl->localStopped){bytes=std::move(found->second);impl->blobQueue.erase(found);++impl->blobConsumed;return 1;}
+    if(!impl->running||impl->localStopped||impl->peerStopped||impl->ownFinished||impl->peerFinished)return -1;
+    return 0;
+}
 bool InputWire::PhaseAvailable(std::uint32_t sequence) const{
     if(!impl)return false;std::lock_guard<std::mutex> lock(impl->queueMutex);return impl->phaseQueue.count(sequence)!=0;
 }
@@ -238,13 +302,15 @@ bool InputWire::Finish(){
     return impl->peerFinished;
 }
 bool InputWire::RequestStop(){
-    std::lock_guard<std::mutex> sending(impl->sendMutex);
+    std::lock_guard<std::mutex> stopCall(impl->stopMutex);
     if(!Error().empty())return false;
     if(impl->localStopped)return true;
     if(!impl->running||impl->ownFinished)return false;
     // Publish before sending: an immediate peer close may race the receive loop.
     {std::lock_guard<std::mutex> lock(impl->queueMutex);impl->localStopped=true;}
     impl->ready.notify_all();
+    std::lock_guard<std::mutex> sending(impl->sendMutex);
+    if(!Error().empty())return false;
     Frame marker={stopMagic,impl->outgoing,{},0};
     if(!transfer(impl->socket,&marker,sizeof(marker),true))return impl->Fail("Stop send failed");
     // Queue an orderly FIN behind the terminal marker before the window exits.

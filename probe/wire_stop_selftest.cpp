@@ -4,6 +4,7 @@
 #include "input_wire.hpp"
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdio>
 #include <future>
 #include <stdexcept>
@@ -50,6 +51,12 @@ struct Frame {std::uint32_t magic,tick;Actions actions;std::uint64_t state;MenuP
 static_assert(sizeof(Hello)==80&&sizeof(Frame)==144,"raw fixture ABI");
 struct PhasePacket {std::uint32_t magic,sequence;PhaseState state;std::uint64_t reserved;};
 static_assert(sizeof(PhasePacket)==128,"raw phase ABI");
+struct BlobHeader {std::uint32_t magic,version,reserved,id,total,offset,length,checksum,headerChecksum;};
+static_assert(sizeof(BlobHeader)==36,"raw blob ABI");
+std::uint32_t hashBytes(const std::uint8_t* data,std::size_t size){std::uint32_t h=2166136261u;for(std::size_t i=0;i<size;i++)h=(h^data[i])*16777619u;return h;}
+BlobHeader blobHeader(std::uint32_t id,std::uint32_t total,std::uint32_t offset,std::uint32_t length,const std::vector<std::uint8_t>& body){
+    BlobHeader h={0x31424c42,1,0,id,total,offset,length,hashBytes(body.data(),body.size()),0};h.headerChecksum=hashBytes((const std::uint8_t*)&h,offsetof(BlobHeader,headerChecksum));return h;
+}
 PhaseState phase(unsigned role,unsigned sequence){
     PhaseState s={};s.kind=sequence%2?phaseLoad:phaseMenu;s.id=0xfeed0000u+sequence;s.selection=role;s.flags=sequence%4;
     s.identity[sequence%32]=std::uint8_t(role+1);s.content[31]=std::uint8_t(0xae^sequence);
@@ -72,9 +79,13 @@ void idleThenExchange(){Pair p(3,300);Sleep(900);require(p.a.Error().empty()&&p.
 struct RawPeer {
     InputWire wire;SOCKET peer=INVALID_SOCKET;
     explicit RawPeer(unsigned timeoutMs=1500){std::uint16_t port=0;SOCKET listener=listenAt(port);Digest d={};auto f=std::async(std::launch::async,[&]{return wire.Open(false,"127.0.0.1",port,d,d,3,timeoutMs);});
-        peer=accept(listener,0,0);closesocket(listener);require(peer!=INVALID_SOCKET,"phase raw accept");Hello h={};require(bytes(peer,&h,sizeof(h),false)&&h.version==5,"phase hello receive");h.role=0;require(bytes(peer,&h,sizeof(h),true),"phase hello reply");require(f.get(),"phase raw handshake");}
+        peer=accept(listener,0,0);closesocket(listener);require(peer!=INVALID_SOCKET,"phase raw accept");Hello h={};require(bytes(peer,&h,sizeof(h),false)&&h.version==6,"phase hello receive");h.role=0;require(bytes(peer,&h,sizeof(h),true),"phase hello reply");require(f.get(),"phase raw handshake");}
     ~RawPeer(){if(peer!=INVALID_SOCKET)closesocket(peer);}
 };
+void sendRawBlob(RawPeer& raw,BlobHeader h,const std::vector<std::uint8_t>& body){
+    h.headerChecksum=hashBytes((const std::uint8_t*)&h,offsetof(BlobHeader,headerChecksum));require(bytes(raw.peer,&h,sizeof(h),true),"raw blob header send");
+    if(h.length&&body.size()>=h.offset+h.length)require(bytes(raw.peer,(void*)(body.data()+h.offset),(int)h.length,true),"raw blob body send");
+}
 void badPhase(unsigned mutation){
     RawPeer r;PhasePacket packet={0x31534850,0,phase(0,0),0};
     if(mutation==0)packet.state.kind=3;if(mutation==1)packet.state.flags=4;if(mutation==2)packet.reserved=1;if(mutation==3)packet.sequence=1;
@@ -106,7 +117,7 @@ void partialFrameTimeout(unsigned operation){
 }
 void malformed(std::uint32_t magic,std::uint32_t tick,bool badPayload,const char* expected){
     std::uint16_t port=0;SOCKET listener=listenAt(port);InputWire wire;Digest d={};auto opened=std::async(std::launch::async,[&]{return wire.Open(false,"127.0.0.1",port,d,d,3,1500);});
-    SOCKET peer=accept(listener,0,0);closesocket(listener);require(peer!=INVALID_SOCKET,"raw accept");Hello hello={};require(bytes(peer,&hello,sizeof(hello),false),"hello receive");require(hello.version==5,"not protocol5");hello.role=0;require(bytes(peer,&hello,sizeof(hello),true),"hello reply");require(opened.get(),"raw open");
+    SOCKET peer=accept(listener,0,0);closesocket(listener);require(peer!=INVALID_SOCKET,"raw accept");Hello hello={};require(bytes(peer,&hello,sizeof(hello),false),"hello receive");require(hello.version==6,"not protocol6");hello.role=0;require(bytes(peer,&hello,sizeof(hello),true),"hello reply");require(opened.get(),"raw open");
     Frame marker={magic,tick,{},0};if(badPayload)marker.actions[1]=.25f;require(bytes(peer,&marker,sizeof(marker),true),"bad marker send");require(until([&]{return !wire.Error().empty();}),"bad marker accepted");require(wire.Error().find(expected)!=std::string::npos,"wrong marker diagnosis");require(!wire.PeerStopped()&&!wire.RequestStop(),"malformed became normal stop");closesocket(peer);
 }
 void invalidRemotePointer(unsigned mutation){
@@ -126,6 +137,78 @@ void invalidLocalPointer(){
 }
 void oldProtocol(unsigned version){
     std::uint16_t port=0;SOCKET listener=listenAt(port);InputWire wire;Digest d={};auto opened=std::async(std::launch::async,[&]{return wire.Open(false,"127.0.0.1",port,d,d,3,1500);});SOCKET peer=accept(listener,0,0);closesocket(listener);Hello hello={};require(bytes(peer,&hello,sizeof(hello),false),"old hello read");hello.role=0;hello.version=version;require(bytes(peer,&hello,sizeof(hello),true),"old hello send");require(!opened.get()&&wire.Error().find("protocol mismatch")!=std::string::npos,"old protocol accepted");closesocket(peer);
+}
+void malformedBlob(unsigned mutation){
+    RawPeer raw;std::vector<std::uint8_t> body(8,0x5a);BlobHeader h=blobHeader(0,8,0,8,body);
+    if(mutation==0)h.version=2;else if(mutation==1)h.reserved=1;else if(mutation==2)h.id=1;
+    else if(mutation==3)h.total=0;else if(mutation==4)h.total=blobMaxBytes+1;
+    else if(mutation==5)h.offset=1;else if(mutation==6)h.length=0;else if(mutation==7)h.length=blobChunkBytes+1;
+    else if(mutation==8)h.headerChecksum^=1;else if(mutation==9)h.checksum^=1;
+    if(mutation!=8)h.headerChecksum=hashBytes((const std::uint8_t*)&h,offsetof(BlobHeader,headerChecksum));
+    require(bytes(raw.peer,&h,sizeof(h),true),"malformed blob header send");
+    if(mutation==9)require(bytes(raw.peer,body.data(),(int)body.size(),true),"bad checksum payload send");
+    require(until([&]{return !raw.wire.Error().empty();}),"malformed blob accepted");require(!raw.wire.PeerStopped(),"bad blob became STOP");
+}
+void blobChunkOffsetMismatch(){
+    RawPeer raw;std::vector<std::uint8_t> body(blobChunkBytes+1,0x37);BlobHeader first=blobHeader(0,(std::uint32_t)body.size(),0,blobChunkBytes,body);
+    sendRawBlob(raw,first,body);BlobHeader second=blobHeader(0,(std::uint32_t)body.size(),1,blobChunkBytes,body);
+    require(bytes(raw.peer,&second,sizeof(second),true),"offset mismatch header send");
+    require(until([&]{return !raw.wire.Error().empty();}),"noncontiguous blob offset accepted");
+}
+void blobChunkTotalMismatch(){
+    RawPeer raw;std::vector<std::uint8_t> body(blobChunkBytes+1,0x31);BlobHeader first=blobHeader(0,(std::uint32_t)body.size(),0,blobChunkBytes,body);
+    sendRawBlob(raw,first,body);BlobHeader second=blobHeader(0,(std::uint32_t)body.size()+1,blobChunkBytes,2,body);
+    require(bytes(raw.peer,&second,sizeof(second),true),"total mismatch header send");
+    require(until([&]{return !raw.wire.Error().empty();}),"inconsistent blob total accepted");
+}
+void blobQueueCap(){
+    RawPeer raw;for(std::uint32_t id=0;id<3;id++){std::vector<std::uint8_t> body(1,(std::uint8_t)id);sendRawBlob(raw,blobHeader(id,1,0,1,body),body);}
+    require(until([&]{return !raw.wire.Error().empty();}),"blob completed queue exceeded cap");
+}
+void blobLocalValidation(){
+    Pair p;std::vector<std::uint8_t> empty,tooLarge(blobMaxBytes+1,0);require(!p.a.SendBlob(0,empty),"empty blob accepted");require(!p.a.SendBlob(0,tooLarge),"oversize blob accepted");require(p.a.Error().empty(),"local size rejection poisoned link");
+}
+void blobLocalCancelPartial(){
+    RawPeer raw;std::vector<std::uint8_t> body(blobChunkBytes+1,0x42),out={9,8,7};BlobHeader h=blobHeader(0,(std::uint32_t)body.size(),0,blobChunkBytes,body);
+    require(bytes(raw.peer,&h,sizeof(h),true),"partial blob header send");require(bytes(raw.peer,body.data(),64,true),"partial blob bytes send");
+    require(raw.wire.RequestStop(),"local STOP during partial blob");require(raw.wire.TryReceiveBlob(0,out)==-1,"local STOP returned incomplete blob");require(out==std::vector<std::uint8_t>({9,8,7}),"local STOP modified output");require(raw.wire.Error().empty(),"local cancellation became failure");
+}
+void blobRemoteStop(){
+    RawPeer raw;std::vector<std::uint8_t> out={4,5};Frame stop={0x31504f53,0,{},0};require(bytes(raw.peer,&stop,sizeof(stop),true),"remote STOP send");
+    require(until([&]{return raw.wire.PeerStopped();}),"remote STOP not observed");require(raw.wire.TryReceiveBlob(0,out)==-1&&out==std::vector<std::uint8_t>({4,5}),"remote STOP delivered blob or changed output");
+}
+void blobEofPartial(){
+    RawPeer raw;std::vector<std::uint8_t> body(blobChunkBytes+1,0x22),out={1,3};BlobHeader h=blobHeader(0,(std::uint32_t)body.size(),0,blobChunkBytes,body);
+    require(bytes(raw.peer,&h,sizeof(h),true)&&bytes(raw.peer,body.data(),64,true),"partial EOF fixture send");shutdown(raw.peer,SD_SEND);closesocket(raw.peer);raw.peer=INVALID_SOCKET;
+    require(until([&]{return !raw.wire.Error().empty();}),"partial blob EOF accepted");require(raw.wire.TryReceiveBlob(0,out)==-1&&out==std::vector<std::uint8_t>({1,3}),"partial EOF delivered or changed output");
+}
+void blobSendBackpressureCancel(){
+    RawPeer raw(10000);int requested=2048;
+    require(setsockopt(raw.peer,SOL_SOCKET,SO_RCVBUF,(const char*)&requested,sizeof(requested))==0,"small receive window setup");
+    int receiveBuffer=0;int optionSize=sizeof(receiveBuffer);require(getsockopt(raw.peer,SOL_SOCKET,SO_RCVBUF,(char*)&receiveBuffer,&optionSize)==0&&receiveBuffer>0,"small receive window query");
+    std::vector<std::uint8_t> body(blobMaxBytes,0x5c),out={3,1,4};auto sender=std::async(std::launch::async,[&]{return raw.wire.SendBlob(0,body);});
+    bool queued=false;ULONGLONG queueDeadline=GetTickCount64()+5000;
+    while(GetTickCount64()<queueDeadline){u_long pending=0;if(ioctlsocket(raw.peer,FIONREAD,&pending)==0&&pending>=(u_long)(receiveBuffer/2)){queued=true;break;}Sleep(1);}
+    if(!queued||sender.wait_for(std::chrono::milliseconds(0))==std::future_status::ready){raw.wire.Close();require(false,"large send did not reach controlled backpressure");}
+    auto stopStarted=GetTickCount64();auto stopper=std::async(std::launch::async,[&]{return raw.wire.RequestStop();});
+    require(until([&]{return raw.wire.TryReceiveBlob(0,out)==-1;} )&&out==std::vector<std::uint8_t>({3,1,4}),"stop intent not published before blocked writer");
+    std::uint32_t magic=0,offset=0,total=0;bool sawPartial=false,sawStop=false;
+    for(unsigned packets=0;packets<10000;packets++){
+        require(bytes(raw.peer,&magic,sizeof(magic),false),"backpressure drain packet magic");
+        if(magic==0x31424c42){BlobHeader h={};h.magic=magic;require(bytes(raw.peer,(char*)&h+sizeof(magic),sizeof(h)-sizeof(magic),false),"backpressure drain blob header");
+            require(h.version==1&&!h.reserved&&h.id==0&&h.total==blobMaxBytes&&h.offset==offset&&h.length>0&&h.length<=blobChunkBytes,"backpressure drain blob sequence");
+            if(!total)total=h.total;require(total==h.total,"backpressure total changed");char chunk[blobChunkBytes];require(bytes(raw.peer,chunk,(int)h.length,false),"backpressure drain blob data");
+            offset+=h.length;if(offset<total)sawPartial=true;continue;}
+        if(magic==0x31504f53){Frame stop={};stop.magic=magic;require(bytes(raw.peer,(char*)&stop+sizeof(magic),sizeof(stop)-sizeof(magic),false),"backpressure drain STOP body");
+            require(stop.tick==0&&stop.state==0&&stop.reserved==0&&stop.pointer.x==0&&stop.pointer.y==0&&stop.pointer.flags==0,"backpressure STOP payload");
+            for(float value:stop.actions)require(value==0,"backpressure STOP actions");sawStop=true;break;}
+        require(false,"unexpected packet in backpressured stream");
+    }
+    require(sawStop&&sawPartial&&offset<total,"STOP did not end an incomplete blob at chunk boundary");
+    Frame peerStop={0x31504f53,0,{},0};require(bytes(raw.peer,&peerStop,sizeof(peerStop),true),"backpressure peer STOP reply");
+    require(stopper.get(),"bounded RequestStop failed");require(!sender.get(),"canceled blob sender reported success");
+    require(GetTickCount64()-stopStarted<5000,"RequestStop/send cancellation exceeded bound");
+    require(until([&]{return raw.wire.PeerStopped();})&&raw.wire.Error().empty(),"backpressure cancellation became transport failure");
 }
 }
 int main(){
@@ -163,8 +246,18 @@ int main(){
         {"remote frame reserved field",[]{invalidRemotePointer(5);}},
         {"STOP nonzero pointer",[]{invalidRemotePointer(6);}},
         {"FIN nonzero pointer",[]{invalidRemotePointer(7);}},
-        {"protocol4 rejection",[]{oldProtocol(4);}},
-        {"protocol2 rejection",[]{oldProtocol(2);}},{"protocol3 rejection",[]{oldProtocol(3);}}
+        {"protocol5 rejection",[]{oldProtocol(5);}}, {"protocol4 rejection",[]{oldProtocol(4);}},
+        {"protocol2 rejection",[]{oldProtocol(2);}},{"protocol3 rejection",[]{oldProtocol(3);}},
+        {"blob malformed version",[]{malformedBlob(0);}}, {"blob reserved field",[]{malformedBlob(1);}},
+        {"blob ID order",[]{malformedBlob(2);}}, {"blob zero total",[]{malformedBlob(3);}},
+        {"blob total cap",[]{malformedBlob(4);}}, {"blob initial offset",[]{malformedBlob(5);}},
+        {"blob zero chunk",[]{malformedBlob(6);}}, {"blob chunk cap",[]{malformedBlob(7);}},
+        {"blob header checksum",[]{malformedBlob(8);}}, {"blob payload checksum",[]{malformedBlob(9);}},
+        {"blob inter-chunk offset",blobChunkOffsetMismatch}, {"blob inter-chunk total",blobChunkTotalMismatch},
+        {"blob completed queue cap",blobQueueCap},
+        {"blob local empty/oversize reject",blobLocalValidation}, {"blob local STOP partial",blobLocalCancelPartial},
+        {"blob remote STOP",blobRemoteStop}, {"blob EOF partial",blobEofPartial},
+        {"blob backpressured send STOP cancellation",blobSendBackpressureCancel}
     };
     unsigned failures=0;for(const auto& test:tests){try{test.run();printf("PASS %s\n",test.name);}catch(const std::exception& e){++failures;printf("FAIL %s: %s\n",test.name,e.what());}}
     WSACleanup();printf("WIRE_STOP_SELFTEST %u/%u passed\n",unsigned(sizeof(tests)/sizeof(tests[0]))-failures,unsigned(sizeof(tests)/sizeof(tests[0])));return failures?1:0;

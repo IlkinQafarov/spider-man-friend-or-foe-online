@@ -2,6 +2,12 @@
 
 Snapshot: **26 October 2026**. The latest player pre-release is [v1.0.1-beta](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases/tag/v1.0.1-beta). This document distinguishes earlier beta evidence, the current release changes, automated fixture evidence and user-reported play.
 
+## Unreleased mid-mission joining
+
+The owner requested joining without restarting the host's area. Research source now records mission history, reconstructs the incoming client's world, verifies sampled state at every tick and hands over the existing companion in place. Check 522 passed a first-area reconnect at tick 655 with 1,866 matching frames afterward. Check 524 passed a friend's first arrival into solo play at tick 857 with 1,904 matching frames afterward. Both cases had clean game/launcher exits, and the host did not leave or reload its area. Separate fresh-client replay and altered-state rejection checks passed too.
+
+This is still research-gated and absent from the published player ZIP. Later areas/bosses, timing and cancellation edges, bounded-history failure handling and normal player packaging remain to be completed. Protocol 6 research builds cannot connect to the published protocol 5 release.
+
 ## Published beta and later campaign evidence
 
 The beta provides the player launcher and native campaign route. According to the owner's two-PC session reports, real players completed the first Tokyo mission together over real Steam. This is **user-reported gameplay evidence**, distinct from the automated local gates below; it does not establish later missions, all hardware or arbitrary network conditions. The earlier lobby-only smoke remains historical evidence, not the limit of all subsequent Steam testing.
@@ -15,7 +21,7 @@ The beta provides the player launcher and native campaign route. According to th
 
 ## v1.0.1-beta changes
 
-Current campaign source uses **scenario 12 / wire protocol 5**. Protocol 5 carries the host pointer through the synchronized input stream and rejects incompatible peers. These changes are included in v1.0.1-beta and **not included in v1.0.0-beta**; both peers need matching builds.
+Published v1.0.1-beta campaign source uses **scenario 12 / wire protocol 5**. Protocol 5 carries the host pointer through the synchronized input stream and rejects incompatible peers. These changes are included in v1.0.1-beta and **not included in v1.0.0-beta**; both peers need matching builds.
 
 | Change or check | Current evidence | Remaining limit |
 | --- | --- | --- |

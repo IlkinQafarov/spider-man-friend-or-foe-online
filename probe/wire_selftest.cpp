@@ -5,6 +5,7 @@
 #include <future>
 #include <limits>
 #include <thread>
+#include <vector>
 
 using coop::Actions;
 static Actions sample(unsigned player,unsigned tick){
@@ -13,6 +14,10 @@ static Actions sample(unsigned player,unsigned tick){
 static coop::MenuPointer pointerSample(unsigned player,unsigned tick){
     if(tick%5==0)return {};
     return {((tick+player)*1003u)%65536u,tick%2?65535u:0u,coop::menuPointerActive|(tick%3==0?coop::menuPointerClick:0u)};
+}
+static bool receiveBlob(coop::InputWire& wire,std::uint32_t id,std::vector<std::uint8_t>& output){
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+    do{int result=wire.TryReceiveBlob(id,output);if(result!=0)return result==1;std::this_thread::sleep_for(std::chrono::milliseconds(1));}while(std::chrono::steady_clock::now()<deadline);return false;
 }
 static bool pointerEqual(const coop::MenuPointer& a,const coop::MenuPointer& b){return a.x==b.x&&a.y==b.y&&a.flags==b.flags;}
 static bool channelTest(){
@@ -57,8 +62,28 @@ static bool mismatchTest(bool scenarioMismatch){
     bool ok=!clientAccepted&&!hostAccepted;
     printf("%s %s_MISMATCH_REJECTED\n",ok?"PASS":"FAIL",scenarioMismatch?"SCENARIO":"BUILD");return ok;
 }
+static bool blobTest(){
+    coop::InputWire host,client;coop::Digest build={},scenario={};constexpr unsigned short port=49375;
+    auto accepting=std::async(std::launch::async,[&]{return host.Open(true,"127.0.0.1",port,build,scenario,3,5000);});
+    bool joined=client.Open(false,"127.0.0.1",port,build,scenario,3,5000),accepted=accepting.get();if(!joined||!accepted){printf("FAIL blob handshake host=%s client=%s\n",host.Error().c_str(),client.Error().c_str());return false;}
+    std::vector<std::uint8_t> left(40003),right(70123),receivedLeft,receivedRight;
+    for(std::size_t i=0;i<left.size();i++)left[i]=(std::uint8_t)((i*17u+3u)&255u);
+    for(std::size_t i=0;i<right.size();i++)right[i]=(std::uint8_t)((i*29u+91u)&255u);
+    coop::PhaseState phaseA={},phaseB={},phaseRA={},phaseRB={};phaseA.kind=coop::phaseLoad;phaseB.kind=coop::phaseMenu;
+    auto leftSend=std::async(std::launch::async,[&]{return host.SendBlob(0,left);});
+    bool rightSent=client.SendBlob(0,right),leftSent=leftSend.get();if(!rightSent||!leftSent){printf("FAIL blob send host=%s client=%s\n",host.Error().c_str(),client.Error().c_str());return false;}
+    Actions a={},b={},ra={},rb={};auto hostTick=std::async(std::launch::async,[&]{return host.Step(0,a,ra);});bool clientTick=client.Step(0,b,rb);
+    auto hostPhase=std::async(std::launch::async,[&]{return host.ExchangePhase(0,phaseA,phaseRA);});bool clientPhaseOk=client.ExchangePhase(0,phaseB,phaseRB);
+    bool hostPhaseOk=hostPhase.get(),hostTickOk=hostTick.get();
+    if(!hostTickOk||!clientTick||!hostPhaseOk||!clientPhaseOk){printf("FAIL blob mixed phase/frame host=%s client=%s\n",host.Error().c_str(),client.Error().c_str());return false;}
+    if(!receiveBlob(client,0,receivedLeft)||!receiveBlob(host,0,receivedRight)||receivedLeft!=left||receivedRight!=right){printf("FAIL blob receive ID0 host=%s client=%s left=%zu/%zu right=%zu/%zu\n",host.Error().c_str(),client.Error().c_str(),receivedLeft.size(),left.size(),receivedRight.size(),right.size());return false;}
+    const std::vector<std::uint8_t> secondLeft={0,1,2,3,4},secondRight={9,8,7,6};
+    if(!host.SendBlob(1,secondLeft)||!client.SendBlob(1,secondRight)){printf("FAIL blob send ID1 host=%s client=%s\n",host.Error().c_str(),client.Error().c_str());return false;}
+    if(!receiveBlob(client,1,receivedLeft)||!receiveBlob(host,1,receivedRight)||receivedLeft!=secondLeft||receivedRight!=secondRight){printf("FAIL blob receive ID1 host=%s client=%s\n",host.Error().c_str(),client.Error().c_str());return false;}
+    puts("PASS BIDIRECTIONAL_MULTI_CHUNK_BLOBS_PHASE_FRAME_INTERLEAVE");return true;
+}
 int main(){
-    bool exchange=channelTest(),build=mismatchTest(false),scenario=mismatchTest(true),invalid=invalidInputTest();
-    if(exchange&&build&&scenario&&invalid){puts("OWN_WIRE_SELFTEST_PASS (transport only; no game synchronization tested)");return 0;}
+    bool exchange=channelTest(),build=mismatchTest(false),scenario=mismatchTest(true),invalid=invalidInputTest(),blob=blobTest();
+    if(exchange&&build&&scenario&&invalid&&blob){puts("OWN_WIRE_SELFTEST_PASS (transport only; no game synchronization tested)");return 0;}
     return 1;
 }
