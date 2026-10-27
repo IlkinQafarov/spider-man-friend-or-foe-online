@@ -58,10 +58,53 @@ ROW_NATIVE_AI = re.compile(
     ROW.pattern.replace("slots=0,1", r"slots=(?:0,1|1,0|0,-1|-1,0)"), re.M)
 FAILURE = re.compile(r"NET FAIL|EXCEPTION|FAIL closed|TIMEOUT:", re.I)
 FIXTURE = re.compile(r"KEYBOARD_FIXTURE|DISCONNECT_NEUTRAL|MUTATION_FIXTURE|TRANSITION PARTY_INSIDE|JITTER_FIXTURE|PAUSE_FIXTURE|PAUSE ASSERT")
+AREA_PATH = re.compile(
+    r"^(?:FrontEndHub/FrontEnd/FrontEndHub|Playground/Encounters/Encounters|"
+    r"(?:Egypt|Island|Nepal|NewYork|Tokyo|Transylvania)/(?:[1-4]_Level/(?:[1-5]_Area|[CSV]_Area)))$")
+LIVE_AREA = re.compile(r"^LIVE_JOIN AREA path=([^ ]+) tick=(\d+)$", re.M)
+NATIVE_EXIT_FIXTURE = re.compile(
+    r"^TRANSITION PARTY_INSIDE_REAL_EXIT tick=\d+ trigger_index=\d+ kind=2 center=\S+,\S+,\S+ "
+    r"slot=\d+ flags=[0-9a-fA-F]{8} extents=\S+,\S+,\S+$", re.M)
 
 
 class Failed(RuntimeError):
     pass
+
+
+def area_path(value):
+    if not AREA_PATH.fullmatch(value):
+        raise argparse.ArgumentTypeError("Use a canonical campaign descriptor path such as Tokyo/1_Level/1_Area")
+    return value
+
+
+def latest_live_area(value):
+    matches = LIVE_AREA.findall(value)
+    if not matches:
+        return None
+    observed, last_tick = None, None
+    for path, raw_tick in matches:
+        tick = int(raw_tick)
+        if not AREA_PATH.fullmatch(path) or (last_tick is not None and tick <= last_tick):
+            raise Failed("LIVE_JOIN AREA markers must use canonical paths and increasing ticks")
+        observed, last_tick = path, tick
+    return observed, last_tick
+
+
+def live_first_join_area_ready(host_log, requested_area, current_tick, minimum_tick):
+    if current_tick < minimum_tick:
+        return False
+    if not re.search(r"^CAMPAIGN ASSERT GAMEPLAY path=[^ ]+ area=\d+ flow=128 sidekick=\d+ prepared=1$", host_log, re.M):
+        return False
+    if requested_area is None:
+        return True
+    observation = latest_live_area(host_log)
+    return observation is not None and observation[0] == requested_area and observation[1] <= current_tick
+
+
+def fixture_check_text(value, allow_native_exit=False):
+    if allow_native_exit:
+        value = NATIVE_EXIT_FIXTURE.sub("", value)
+    return value
 
 
 def tutorial_ui_evidence(logs, complete=False):
@@ -121,7 +164,7 @@ def no_reparse(path, new=False):
     return path
 
 
-def environment(source, seat, diagnostics=True, campaign=False, deferred=False, profile=None, hub_spawn=-1, skip_nis=False, auto_together=True, net_port="49375", tutorial_ui=False, slot_fixture=None, overwrite_no=False, live_join=False, wait_link=False):
+def environment(source, seat, diagnostics=True, campaign=False, deferred=False, profile=None, hub_spawn=-1, skip_nis=False, auto_together=True, net_port="49375", tutorial_ui=False, slot_fixture=None, overwrite_no=False, live_join=False, wait_link=False, live_start_area=None, live_first_join=False, live_history_frames=None):
     env = {key: value for key, value in source.items() if not key.upper().startswith("COOP_PROBE_")}
     values = {
         "AUTOTEST": "ExecutionPath", "INPUTBOT": "0", "PLAYBOT": "0", "ACTIONBOT": "0",
@@ -179,10 +222,26 @@ def environment(source, seat, diagnostics=True, campaign=False, deferred=False, 
             values["WAIT_TEXT"] = os.environ["FOF_RESEARCH_WAIT_TEXT"]
     if live_join:
         values["LIVE_JOIN_TEST"] = "1"
+        if source.get("FOF_RESEARCH_LIVE_SWAP_TEST") == "1":
+            values["LIVE_SWAP_TEST"] = "1"
+        if live_first_join and source.get("FOF_RESEARCH_LIVE_TRANSITIONS") == "1":
+            values["TRANSITION_FIXTURE"] = "1"
+            values["TRANSITION_COUNT"] = "1"
     if wait_link:
         if not campaign or not deferred:
             raise Failed("Wait-link mode requires a deferred campaign peer")
         values["HOST_WAIT_LINK"] = "1"
+    configured_live_start = live_start_area
+    if live_first_join and campaign and live_join and seat == "host" and configured_live_start is None:
+        configured_live_start = source.get("FOF_RESEARCH_LIVE_START_AREA")
+    if configured_live_start is not None:
+        if not campaign or not live_join or not live_first_join or seat != "host":
+            raise Failed("Live start-area fixture requires the live-first-join campaign host")
+        values["LIVE_START_AREA"] = area_path(configured_live_start)
+    if live_history_frames is not None:
+        if not campaign or not live_join or not live_first_join or seat != "host" or live_history_frames != 300:
+            raise Failed("Live history cap fixture requires the live-first-join campaign host and300 frames")
+        values["LIVE_HISTORY_FRAMES"] = "300"
     if tutorial_ui:
         if not campaign or any(key in values for key in ("LEVEL_END_TEST", "HUB_JUMP_TEST", "NIS_GATE_TEST", "HOST_WAIT_LINK", "HOST_CONTINUE", "HUB_SPAWN", "HUB_SIDEKICK_TEST")):
             raise Failed("Tutorial UI regression requires the fresh retail first-area route")
@@ -451,6 +510,47 @@ def live_join_complete_tick(host_log, replacement_log, *, required=True, require
     return int(host_ticks[0])
 
 
+def live_join_cancel_tick(host_log, guest_log, *, required=True):
+    """Require a guest that entered catch-up to close normally and cancel at the frozen host tick."""
+    frozen = re.findall(r"^LIVE_JOIN FROZEN tick=(\d+) history=(\d+) preserved=1$", host_log, re.M)
+    catchup = re.findall(r"^LIVE_JOIN CATCHUP frames=(\d+) target_tick=(\d+) host_area_preserved=1$", guest_log, re.M)
+    canceled = re.findall(r"^LIVE_JOIN CANCELED tick=(\d+) reason=([a-z_]+) preserved=1$", host_log, re.M)
+    if not frozen or not catchup or not canceled:
+        if required:
+            raise Failed("Canceled live join requires FROZEN, guest CATCHUP, and host CANCELED evidence")
+        return None
+    if len(frozen) != 1 or len(catchup) != 1 or len(canceled) != 1:
+        raise Failed("Canceled live join markers must each occur exactly once")
+    frozen_tick, history = map(int, frozen[0])
+    frames, target_tick = map(int, catchup[0])
+    canceled_tick = int(canceled[0][0])
+    if not history or frames != history or target_tick != frozen_tick or canceled_tick != frozen_tick:
+        raise Failed("Canceled live join did not preserve the frozen host tick/history")
+    if "LIVE_JOIN COMPLETE" in host_log or "LIVE_JOIN COMPLETE" in guest_log:
+        raise Failed("Canceled live join unexpectedly completed admission")
+    return frozen_tick
+
+
+def live_join_history_reject_tick(host_log, guest_log, *, required=True):
+    """Validate bounded history refusal without requiring a host FROZEN marker."""
+    disabled = re.findall(
+        r"^LIVE_JOIN HISTORY_DISABLED tick=(\d+) reason=capacity_or_allocation host_gameplay_continues=1$",
+        host_log, re.M)
+    canceled = re.findall(r"^LIVE_JOIN CANCELED tick=(\d+) reason=history_unavailable preserved=1$", host_log, re.M)
+    if not disabled or not canceled:
+        if required:
+            raise Failed("History refusal requires HISTORY_DISABLED and CANCELED evidence")
+        return None
+    if len(disabled) != 1 or len(canceled) != 1:
+        raise Failed("History refusal markers must each occur exactly once")
+    disabled_tick, canceled_tick = int(disabled[0]), int(canceled[0])
+    if disabled_tick > canceled_tick:
+        raise Failed("History became unavailable after the join was canceled")
+    if "LIVE_JOIN FROZEN" in host_log or re.search(r"LIVE_JOIN (?:CATCHUP|COMPLETE)", guest_log):
+        raise Failed("History refusal unexpectedly froze the host or started guest catch-up")
+    return canceled_tick
+
+
 class Win32:
     """Only handles opened from this run's own launcher output are game owners."""
     class Basic(C.Structure):
@@ -572,6 +672,19 @@ def run(args):
     if args.live_join:
         summary["scope"] = "Native in-mission reconnect preservation over loopback; requires matching host/replacement handoff markers and absolute-tick state suffix."
         summary["live_join"] = {"complete_tick": None, "host_tick_continued": False}
+    if args.live_first_join and os.environ.get("FOF_RESEARCH_LIVE_TRANSITIONS") == "1":
+        summary["scope"] = "Research live first join using a native exit-transition fixture over loopback; not physical-input or WAN verification."
+    if args.cancel_live_join:
+        summary["scope"] = "Research live-join cancellation after guest catch-up begins; host must retain its frozen mission and continue for360 ticks."
+        if args.live_first_join and os.environ.get("FOF_RESEARCH_LIVE_TRANSITIONS") == "1":
+            summary["scope"] += " Includes the native exit-transition fixture."
+        summary["live_join_cancel"] = {"frozen_tick": None, "host_continued_ticks": 0}
+    if args.reject_live_history:
+        summary["scope"] = "Negative research case: host refuses admission when bounded history is unavailable, continues its mission, and guest closes normally."
+        if args.live_first_join and os.environ.get("FOF_RESEARCH_LIVE_TRANSITIONS") == "1":
+            summary["scope"] += " Includes the native exit-transition fixture."
+        summary["live_join_history_reject"] = {"cancel_tick": None, "host_continued_ticks": 0}
+        summary["required_common_frames"] = 0
     slot_test = args.slot_fixture is not None
     negative_slot = slot_test and (args.overwrite_no or len(args.seed_peer_slots) == 3 or args.stop_at_overwrite)
     if slot_test:
@@ -675,11 +788,16 @@ def run(args):
                             args.skip_cutscenes == "both" or (args.skip_cutscenes == "host" and seat == "host"),
                             not args.no_auto_together, "49375" if seat == "host" else peer_port, args.tutorial_ui, args.slot_fixture, args.overwrite_no,
                             live_join=args.live_join,
-                            wait_link=args.live_first_join and seat == "peer"), seat + "-launcher")
+                            wait_link=args.live_first_join and seat == "peer",
+                            live_start_area=args.live_start_area if seat == "host" else None,
+                            live_first_join=args.live_first_join,
+                            live_history_frames=300 if args.reject_live_history and seat == "host" else None), seat + "-launcher")
             launchers.append(process)
             lane.register_launcher(process)
         last_report = 0
         frozen_since, connected = None, False
+        cancel_requested, cancel_tick = False, None
+        reject_requested, reject_tick = False, None
         rejoin_stage = 0  # 0 joined once, 1 peer closed, 2 replacement peer started, 3 rejoined
         while True:
             outputs, parsed = [], []
@@ -699,9 +817,19 @@ def run(args):
                     raise Failed(seat + ": " + source[bad.start():].splitlines()[0][:240])
                 # --campaign deliberately uses the campaign menu/hub bot; nothing else may be a fixture.
                 checked = probe_text.replace("CAMPAIGN CONFIG enabled=1 fixture=1 research_autotest=0", "") if args.campaign else probe_text
+                checked = fixture_check_text(checked, allow_native_exit=(
+                    args.live_first_join and os.environ.get("FOF_RESEARCH_LIVE_TRANSITIONS") == "1"))
                 if FIXTURE.search(checked) or "fixture=1" in checked:
                     raise Failed(seat + ": unexpected input/test fixture marker in real-play QA")
-                dropped = (args.rejoin or args.rejoin_in_mission) and seat == "peer" and rejoin_stage == 1
+                if args.reject_live_history and seat == "peer" and not reject_requested and outputs:
+                    reject_tick = live_join_history_reject_tick(text(boxes[0] / "probe.log"), probe_text, required=False)
+                    if reject_tick is not None:
+                        reject_requested = True
+                        summary["live_join_history_reject"]["cancel_tick"] = reject_tick
+                        event("LIVE_JOIN_HISTORY_REFUSAL_PEER_EXIT_EXPECTED", cancel_tick=reject_tick)
+                dropped = (((args.rejoin or args.rejoin_in_mission) and seat == "peer" and rejoin_stage == 1)
+                           or (args.cancel_live_join and seat == "peer" and cancel_requested)
+                           or (args.reject_live_history and seat == "peer" and reject_requested))
                 if launchers[i].poll() is not None and not dropped:
                     raise Failed(seat + ": launcher exited before requested close")
                 if games[i] is not None and api.exit(games[i]) is not None and not dropped:
@@ -724,11 +852,19 @@ def run(args):
                 rejoin_stage = 1
                 event("PEER_DROPPED_AT_HUB")
             if args.rejoin_in_mission and rejoin_stage == 0 and connected and summary["common_frames"] >= 600 and all("CAMPAIGN ASSERT GAMEPLAY" in output for output in outputs):
+                if os.environ.get("FOF_RESEARCH_LIVE_SWAP_TEST") == "1" and not re.search(
+                        r"^NET CHARACTER_SWAP tick=\d+ host_slot=1$", outputs[0], re.M):
+                    raise Failed("Swapped-host fixture did not reach normal-gameplay swap before drop")
                 # Both playing a mission: the joiner leaves mid-mission; the host keeps playing alone in the mission.
                 if api.close_windows([games[1]]).get(games[1]["pid"], 0) < 1:
                     raise Failed("peer: close request for the drop was not posted")
                 rejoin_stage = 1
                 event("PEER_DROPPED_IN_MISSION", common_frames=summary["common_frames"])
+            if args.cancel_live_join and connected and not cancel_requested and re.search(r"^LIVE_JOIN CATCHUP ", outputs[1], re.M):
+                if api.close_windows([games[1]]).get(games[1]["pid"], 0) < 1:
+                    raise Failed("peer: close request after live-join catch-up was not posted")
+                cancel_requested = True
+                event("LIVE_JOIN_GUEST_CLOSED_DURING_CATCHUP")
             if rejoin_stage == 1 and "NET PARTNER_LOST" in outputs[0] and launchers[1].poll() is not None:
                 if launchers[1].returncode != 0:
                     raise Failed("peer: dropped launcher exit " + str(launchers[1].returncode))
@@ -744,11 +880,9 @@ def run(args):
                 connected, rejoin_stage = False, 2
                 event("HOST_CONTINUED_ALONE_REPLACEMENT_PEER_STARTED")
             host_solo_frames = max(parsed[0]) + 1 if parsed[0] else 0
-            host_in_canonical_mission = bool(re.search(
-                r"^CAMPAIGN ASSERT GAMEPLAY path=Tokyo/1_Level/1_Area area=\d+ flow=128 sidekick=\d+ prepared=1$",
-                outputs[0], re.M))
-            first_join_ready = (not args.live_first_join or
-                                (host_solo_frames >= 600 and host_in_canonical_mission))
+            host_in_canonical_mission = live_first_join_area_ready(
+                outputs[0], args.live_join_area, host_solo_frames - 1, args.live_join_after_tick)
+            first_join_ready = not args.live_first_join or host_in_canonical_mission
             if args.join_at_hub and not connected and all(games) and first_join_ready:
                 # Both linked at once; the host bot plays New Game alone and the joiner waits at its main menu.
                 for i, role in enumerate(("host", "join")):
@@ -759,7 +893,8 @@ def run(args):
                 if rejoin_stage == 2:
                     rejoin_stage = 3
                 event("LIVE_FIRST_JOIN_ROLES_WRITTEN" if args.live_first_join else "JOIN_AT_HUB_ROLES_WRITTEN",
-                      rejoin=rejoin_stage == 3, host_solo_frames=host_solo_frames if args.live_first_join else None)
+                      rejoin=rejoin_stage == 3, host_solo_frames=host_solo_frames if args.live_first_join else None,
+                      live_join_area=args.live_join_area if args.live_first_join else None)
             if args.deferred_connect and not connected:
                 if any(re.search(r"^NET (?:opening|READY)", output, re.M) for output in outputs):
                     raise Failed("A deferred game connected before its role was written")
@@ -773,7 +908,35 @@ def run(args):
                         connected = True
                         event("DEFERRED_CONNECT_WRITTEN", waited_seconds=round(time.monotonic() - frozen_since, 1))
             stride = 120 if args.quiet else 1
-            if args.live_first_join and connected or args.live_join and rejoin_stage >= 2:
+            if args.cancel_live_join:
+                common = 0
+                if cancel_requested:
+                    cancel_tick = live_join_cancel_tick(outputs[0], outputs[1], required=False)
+                    if cancel_tick is not None:
+                        summary["live_join_cancel"]["frozen_tick"] = cancel_tick
+                        host_ticks = parsed[0]
+                        # Quiet logs can still end at the sample before the frozen
+                        # tick. rows() independently rejects timeline resets.
+                        continued = max(0, max(host_ticks) - cancel_tick) if host_ticks else 0
+                        summary["live_join_cancel"]["host_continued_ticks"] = continued
+                        if continued >= 360:
+                            if "LIVE_JOIN COMPLETE" in outputs[0] or "LIVE_JOIN COMPLETE" in outputs[1]:
+                                raise Failed("Canceled live join later reported admission complete")
+                            event("LIVE_JOIN_CANCEL_CONFIRMED", frozen_tick=cancel_tick, host_continued_ticks=continued)
+                            break
+            elif args.reject_live_history:
+                common = 0
+                if reject_requested:
+                    reject_tick = live_join_history_reject_tick(outputs[0], outputs[1], required=False)
+                    if reject_tick is not None:
+                        host_ticks = parsed[0]
+                        continued = max(0, max(host_ticks) - reject_tick) if host_ticks else 0
+                        summary["live_join_history_reject"]["host_continued_ticks"] = continued
+                        if continued >= 360:
+                            event("LIVE_JOIN_HISTORY_REFUSAL_CONFIRMED", cancel_tick=reject_tick,
+                                  host_continued_ticks=continued, common_frames=0)
+                            break
+            elif args.live_first_join and connected or args.live_join and rejoin_stage >= 2:
                 complete_tick = live_join_complete_tick(
                     outputs[0], outputs[1], required=False, require_drop=not args.live_first_join)
                 common = (compare_suffix(parsed[0], parsed[1], stride, complete_tick)
@@ -821,11 +984,11 @@ def run(args):
                 event("REAL_PLAY_WAIT", ready=ready, sample_counts=list(map(len, parsed)), common_frames=common)
                 last_report = now
             time.sleep(0.05)
-        closing = games[:1] if args.one_sided_stop or args.stop_at_overwrite else games
+        closing = games[:1] if args.one_sided_stop or args.stop_at_overwrite or args.cancel_live_join or args.reject_live_history else games
         summary["close_requests"] = api.close_windows(closing)
         if any(summary["close_requests"].get(game["pid"], 0) < 1 for game in closing):
             raise Failed("Each selected owned game requires a successful WM_CLOSE post")
-        event("HOST_ONLY_WM_CLOSE" if args.one_sided_stop or args.stop_at_overwrite else "BOTH_OWNED_GAMES_WM_CLOSE")
+        event("HOST_ONLY_WM_CLOSE" if args.one_sided_stop or args.stop_at_overwrite or args.cancel_live_join or args.reject_live_history else "BOTH_OWNED_GAMES_WM_CLOSE")
         close_end = min(deadline - 4, time.monotonic() + 18)
         while any(process.poll() is None for process in launchers) or any(api.exit(game) is None for game in games):
             if time.monotonic() >= close_end:
@@ -841,9 +1004,44 @@ def run(args):
         if args.rejoin_in_mission and not args.live_join:
             final_logs[0] = final_logs[0].rsplit("NET PARTNER_LOST", 1)[-1]  # the host's new session after the drop
         stride = 120 if args.quiet else 1
-        if args.live_join:
+        if args.cancel_live_join:
+            frozen_tick = live_join_cancel_tick(final_logs[0], final_logs[1])
+            host_full_rows = rows(final_logs[0], stride, allow_native_ai=True)
+            host_after_cancel = final_logs[0].split("LIVE_JOIN CANCELED", 1)[1]
+            continued = max(host_full_rows) - frozen_tick if host_full_rows else 0
+            if continued < 360:
+                raise Failed("Canceled live-join host did not continue for at least360 ticks")
+            if re.search(r"LIVE_JOIN COMPLETE|JOIN_IN_MISSION|MISSION_COMMIT|Helicarrier|CAMPAIGN ASSERT GAMEPLAY", host_after_cancel, re.I):
+                raise Failed("Canceled live join reloaded, reset, or completed admission after cancellation")
+            summary["live_join_cancel"] = {"frozen_tick": frozen_tick, "host_continued_ticks": continued}
+            event("LIVE_JOIN_CANCEL_FINAL", frozen_tick=frozen_tick, host_continued_ticks=continued,
+                  peer_clean_exit=summary["launcher_returncodes"][1] == 0 and summary["game_exitcodes"][1] == 0)
+        elif args.reject_live_history:
+            refusal_tick = live_join_history_reject_tick(final_logs[0], final_logs[1])
+            host_full_rows = rows(final_logs[0], stride, allow_native_ai=True)
+            continued = max(host_full_rows) - refusal_tick if host_full_rows else 0
+            if continued < 360:
+                raise Failed("History-refusal host did not continue for at least360 ticks")
+            host_after_cancel = final_logs[0].split("LIVE_JOIN CANCELED", 1)[1]
+            if re.search(r"LIVE_JOIN COMPLETE|JOIN_IN_MISSION|MISSION_COMMIT|Helicarrier|CAMPAIGN ASSERT GAMEPLAY", host_after_cancel, re.I):
+                raise Failed("History refusal reloaded, reset, or completed admission after cancellation")
+            if "NET peer ended session normally" not in final_logs[1] or "deferred owned WM_CLOSE" not in final_logs[1]:
+                raise Failed("History-refusal guest must receive the host stop and close itself normally")
+            if "LIVE_JOIN CATCHUP" in final_logs[1] or "LIVE_JOIN COMPLETE" in final_logs[1]:
+                raise Failed("History-refusal guest unexpectedly started or completed catch-up")
+            summary["live_join_history_reject"] = {"cancel_tick": refusal_tick,
+                                                    "host_continued_ticks": continued,
+                                                    "common_frames": 0, "guest_self_closed": True}
+            event("LIVE_JOIN_HISTORY_REFUSAL_FINAL", cancel_tick=refusal_tick,
+                  host_continued_ticks=continued, guest_self_closed=True, common_frames=0)
+        elif args.live_join:
             live_tick = live_join_complete_tick(final_logs[0], final_logs[1], required=True,
                                                 require_drop=not args.live_first_join)
+            if os.environ.get("FOF_RESEARCH_LIVE_SWAP_TEST") == "1":
+                before_drop = final_logs[0].split("NET PARTNER_LOST", 1)[0]
+                if not re.search(r"^NET CHARACTER_SWAP tick=\d+ host_slot=1$", before_drop, re.M):
+                    raise Failed("Swapped-host fixture did not swap before the peer left")
+                summary["live_swap"] = {"host_slot_before_drop": 1, "verified": True}
             host_full_rows = rows(final_logs[0], stride, allow_native_ai=True)
             if args.live_first_join:
                 frozen = list(re.finditer(r"^LIVE_JOIN FROZEN(?: .*)?$", final_logs[0], re.M))
@@ -870,7 +1068,7 @@ def run(args):
             summary["common_frames"] = compare_suffix(host_suffix_rows, replacement_rows, stride, live_tick)
         else:
             summary["common_frames"] = compare(*(rows(value, stride) for value in final_logs), stride=stride)
-        if not negative_slot and summary["common_frames"] < args.frames:
+        if not negative_slot and not args.cancel_live_join and not args.reject_live_history and summary["common_frames"] < args.frames:
             raise Failed("Final common sample count regressed")
         if slot_test:
             summary["slot_fixture"] = (phase_stop_evidence(final_logs, args.slot_fixture, (args.seed_host_slots, args.seed_peer_slots), complete=True) if args.stop_at_overwrite
@@ -1037,12 +1235,55 @@ def selftest():
     assert environment({}, "host", True, True, True)["COOP_PROBE_NET_MODE"] == "deferred"
     live_host = environment({}, "host", campaign=True, live_join=True)
     live_replacement = environment({}, "peer", campaign=True, deferred=True, live_join=True)
-    first_host = environment({}, "host", campaign=True, deferred=True, live_join=True)
-    first_peer = environment({}, "peer", campaign=True, deferred=True, live_join=True, wait_link=True)
+    first_host = environment({}, "host", campaign=True, deferred=True, live_join=True, live_first_join=True)
+    first_peer = environment({}, "peer", campaign=True, deferred=True, live_join=True, wait_link=True, live_first_join=True)
+    transition_fixture = environment({"FOF_RESEARCH_LIVE_TRANSITIONS": "1"}, "host", campaign=True, live_join=True, live_first_join=True)
+    history_fixture = environment({}, "host", campaign=True, live_join=True, live_first_join=True,
+                                  live_history_frames=300)
+    live_area_fixture = environment({}, "host", campaign=True, live_join=True,
+                                    live_start_area="Transylvania/4_Level/3_Area", live_first_join=True)
+    inherited_live_area = environment({"FOF_RESEARCH_LIVE_START_AREA": "Tokyo/1_Level/2_Area"},
+                                      "host", campaign=True, live_join=True, live_first_join=True)
     assert live_host["COOP_PROBE_LIVE_JOIN_TEST"] == "1"
     assert live_replacement["COOP_PROBE_LIVE_JOIN_TEST"] == "1"
     assert first_host["COOP_PROBE_LIVE_JOIN_TEST"] == "1" and "COOP_PROBE_HOST_WAIT_LINK" not in first_host
     assert first_peer["COOP_PROBE_LIVE_JOIN_TEST"] == "1" and first_peer["COOP_PROBE_HOST_WAIT_LINK"] == "1"
+    assert transition_fixture["COOP_PROBE_TRANSITION_FIXTURE"] == "1" and transition_fixture["COOP_PROBE_TRANSITION_COUNT"] == "1"
+    assert live_area_fixture["COOP_PROBE_LIVE_START_AREA"] == "Transylvania/4_Level/3_Area"
+    assert inherited_live_area["COOP_PROBE_LIVE_START_AREA"] == "Tokyo/1_Level/2_Area"
+    assert history_fixture["COOP_PROBE_LIVE_HISTORY_FRAMES"] == "300"
+    gameplay_marker = "CAMPAIGN ASSERT GAMEPLAY path=Tokyo/1_Level/1_Area area=34 flow=128 sidekick=1 prepared=1\n"
+    assert live_first_join_area_ready(gameplay_marker, None, 600, 600)
+    assert not live_first_join_area_ready(gameplay_marker, None, 599, 600)
+    area_markers = ("LIVE_JOIN AREA path=Tokyo/1_Level/1_Area tick=0\n"
+                    "LIVE_JOIN AREA path=Transylvania/4_Level/3_Area tick=510\n")
+    assert latest_live_area(area_markers) == ("Transylvania/4_Level/3_Area", 510)
+    for bad_area_markers in ("LIVE_JOIN AREA path=Tokyo/0_Level/1_Area tick=0\n",
+                             "LIVE_JOIN AREA path=Tokyo/1_Level/1_Area tick=1\n"
+                             "LIVE_JOIN AREA path=Tokyo/1_Level/2_Area tick=1\n"):
+        try:
+            latest_live_area(bad_area_markers)
+        except Failed:
+            pass
+        else:
+            raise AssertionError("Invalid live area marker accepted")
+    assert live_first_join_area_ready(gameplay_marker + area_markers, "Transylvania/4_Level/3_Area", 600, 600)
+    assert not live_first_join_area_ready(gameplay_marker + area_markers, "Tokyo/1_Level/1_Area", 600, 600)
+    assert not live_first_join_area_ready(gameplay_marker + area_markers.replace("tick=510", "tick=700"),
+                                          "Transylvania/4_Level/3_Area", 600, 600)
+    native_exit_marker = ("TRANSITION PARTY_INSIDE_REAL_EXIT tick=600 trigger_index=1 kind=2 "
+                          "center=1,2,3 slot=0 flags=00000001 extents=4,5,6\n")
+    assert FIXTURE.search(fixture_check_text(native_exit_marker))
+    assert not FIXTURE.search(fixture_check_text(native_exit_marker, allow_native_exit=True))
+    assert FIXTURE.search(fixture_check_text(native_exit_marker.replace("kind=2", "kind=3"), allow_native_exit=True))
+    for invalid_area in ("", "tokyo/1_Level/1_Area", "Tokyo/0_Level/1_Area", "Tokyo/1_Level/X_Area",
+                         "Transylvania/4_Level/9_Area", "FrontEndHub/FrontEnd/1_Area"):
+        try:
+            area_path(invalid_area)
+        except argparse.ArgumentTypeError:
+            pass
+        else:
+            raise AssertionError("Invalid campaign area path accepted")
     valid_live_host = "NET state tick=0\nNET PARTNER_LOST\nLIVE_JOIN COMPLETE tick=600 preserved=1\n"
     valid_live_peer = "LIVE_JOIN COMPLETE tick=600 preserved=1\n"
     assert live_join_complete_tick(valid_live_host, valid_live_peer) == 600
@@ -1064,6 +1305,40 @@ def selftest():
             pass
         else:
             raise AssertionError("Invalid live-join preservation evidence accepted")
+    cancel_host = ("LIVE_JOIN FROZEN tick=600 history=1800 preserved=1\n"
+                   "NET state tick=600\nLIVE_JOIN CANCELED tick=600 reason=history_or_checkpoint preserved=1\n")
+    cancel_guest = "LIVE_JOIN CATCHUP frames=1800 target_tick=600 host_area_preserved=1\n"
+    assert live_join_cancel_tick(cancel_host, cancel_guest) == 600
+    for host_log, guest_log in (
+            (cancel_host.replace("tick=600 reason", "tick=601 reason"), cancel_guest),
+            (cancel_host, cancel_guest.replace("frames=1800", "frames=1799")),
+            (cancel_host + "LIVE_JOIN COMPLETE tick=600 preserved=1\n", cancel_guest),
+            (cancel_host.replace("LIVE_JOIN CANCELED", "LIVE_JOIN COMPLETE"), cancel_guest),
+            (cancel_host, ""),
+            (cancel_host + "LIVE_JOIN CANCELED tick=600 reason=host_handoff preserved=1\n", cancel_guest)):
+        try:
+            live_join_cancel_tick(host_log, guest_log)
+        except Failed:
+            pass
+        else:
+            raise AssertionError("Invalid canceled live-join evidence accepted")
+    history_host = ("LIVE_JOIN HISTORY_DISABLED tick=300 reason=capacity_or_allocation host_gameplay_continues=1\n"
+                    "LIVE_JOIN CANCELED tick=600 reason=history_unavailable preserved=1\n")
+    history_guest = "NET peer ended session normally join_wait=8; deferred owned WM_CLOSE\n"
+    assert live_join_history_reject_tick(history_host, history_guest) == 600
+    for host_log, guest_log in (
+            (history_host.replace("reason=capacity_or_allocation", "reason=malformed"), history_guest),
+            (history_host.replace("tick=300", "tick=700"), history_guest),
+            (history_host + "LIVE_JOIN FROZEN tick=600 history=300 preserved=1\n", history_guest),
+            (history_host, history_guest + "LIVE_JOIN CATCHUP frames=1 target_tick=600 host_area_preserved=1\n"),
+            (history_host, "LIVE_JOIN COMPLETE tick=600 preserved=1\n"),
+            (history_host + "LIVE_JOIN CANCELED tick=600 reason=history_unavailable preserved=1\n", history_guest)):
+        try:
+            live_join_history_reject_tick(host_log, guest_log)
+        except Failed:
+            pass
+        else:
+            raise AssertionError("Invalid history-refusal evidence accepted")
     tutorial = environment({"COOP_PROBE_LEVEL_END_TEST": "1"}, "peer", campaign=True, tutorial_ui=True)
     assert tutorial["COOP_PROBE_TUTORIAL_UI_TEST"] == "1" and "COOP_PROBE_LEVEL_END_TEST" not in tutorial
     prefix = ("CAMPAIGN ASSERT NEW_GAME operation=0 selection=0\n"
@@ -1219,6 +1494,17 @@ def selftest():
             assert main(live_base) == 0 and seen[-1].live_join
             first_join_args = ["--campaign", "--join-at-hub", "--live-first-join"]
             assert main(first_join_args) == 0 and seen[-1].live_first_join and seen[-1].live_join
+            assert seen[-1].live_join_after_tick == 600 and seen[-1].live_join_area is None and seen[-1].live_start_area is None
+            cancel_args = first_join_args + ["--cancel-live-join"]
+            assert main(cancel_args) == 0 and seen[-1].cancel_live_join and seen[-1].live_first_join
+            history_args = first_join_args + ["--reject-live-history"]
+            assert main(history_args) == 0 and seen[-1].reject_live_history and seen[-1].live_first_join
+            targeted_first_join = first_join_args + ["--live-join-after-tick", "840", "--live-join-area",
+                                                     "Transylvania/4_Level/3_Area", "--live-start-area",
+                                                     "Transylvania/4_Level/3_Area"]
+            assert main(targeted_first_join) == 0 and seen[-1].live_join_after_tick == 840
+            assert seen[-1].live_join_area == "Transylvania/4_Level/3_Area"
+            assert seen[-1].live_start_area == "Transylvania/4_Level/3_Area"
             invalid = [
                 ["--slot-fixture", "0"], base + ["--overwrite-no"],
                 base + ["--slot-fixture", "0", "--seed-host-slots", "0"],
@@ -1233,6 +1519,16 @@ def selftest():
                 ["--live-first-join"], ["--campaign", "--live-first-join"],
                 ["--campaign", "--join-at-hub", "--live-first-join", "--rejoin"],
                 ["--campaign", "--join-at-hub", "--live-first-join", "--rejoin-in-mission"],
+                ["--campaign", "--join-at-hub", "--cancel-live-join"],
+                ["--campaign", "--join-at-hub", "--reject-live-history"],
+                first_join_args + ["--cancel-live-join", "--rejoin"],
+                first_join_args + ["--reject-live-history", "--cancel-live-join"],
+                ["--campaign", "--join-at-hub", "--live-join-after-tick", "600"],
+                ["--campaign", "--join-at-hub", "--live-join-area", "Tokyo/1_Level/1_Area"],
+                ["--campaign", "--join-at-hub", "--live-start-area", "Tokyo/1_Level/1_Area"],
+                first_join_args + ["--live-join-after-tick", "60001"],
+                first_join_args + ["--live-join-area", "Tokyo/0_Level/1_Area"],
+                first_join_args + ["--live-start-area", "FrontEndHub/FrontEnd/1_Area"],
             ]
             for command in invalid:
                 before_calls = len(seen)
@@ -1251,7 +1547,7 @@ def selftest():
                     assert exc.code == 2
                 else:
                     raise AssertionError("Inherited alternate route accepted for slot regression")
-    print("OWN_PLAY_LIFECYCLE_SELFTEST_PASS rows/environment/quiet/live-join+first-join+absolute-ticks/tutorial+10negative/slot4positive+11negative/phase-stop+8negative/seed7negative+retarget+inventory/CLI5positive+10negative")
+    print("OWN_PLAY_LIFECYCLE_SELFTEST_PASS rows/environment/quiet/live-join+first-join+area-threshold+cancel-catchup+history-refusal+absolute-ticks/tutorial+10negative/slot4positive+11negative/phase-stop+8negative/seed7negative+retarget+inventory/CLI8positive+20negative")
     return 0
 
 
@@ -1276,6 +1572,16 @@ def main(argv=None):
                         help="With --campaign --join-at-hub --rejoin-in-mission: require a preserved in-mission join without returning the host to the Helicarrier")
     parser.add_argument("--live-first-join", action="store_true",
                         help="With --campaign --join-at-hub: host starts alone in the mission, then waits for the first peer to join without reloading the host area")
+    parser.add_argument("--live-join-after-tick", type=int, metavar="TICK",
+                        help="With --live-first-join: do not connect the guest until the host reaches this mission tick (default600)")
+    parser.add_argument("--live-join-area", type=area_path,
+                        help="With --live-first-join: wait until the latest LIVE_JOIN AREA observation names this canonical descriptor path")
+    parser.add_argument("--live-start-area", type=area_path,
+                        help="With --live-first-join: research fixture that starts the host at this canonical area")
+    parser.add_argument("--cancel-live-join", action="store_true",
+                        help="With --live-first-join: normally close the owned guest after CATCHUP begins; require host cancellation at the frozen tick and360 more ticks in the same mission")
+    parser.add_argument("--reject-live-history", action="store_true",
+                        help="With --live-first-join: cap host journal at300 frames; require HISTORY_DISABLED and normal history_unavailable refusal before catch-up")
     parser.add_argument("--rejoin", action="store_true",
                         help="With --join-at-hub: after the first join the joiner closes its game; the host keeps playing and a new joiner rejoins at the hub")
     parser.add_argument("--skip-cutscenes", nargs="?", const="both", choices=("both", "host"), default=None,
@@ -1297,6 +1603,9 @@ def main(argv=None):
     parser.add_argument("--tutorial-ui", action="store_true", help="With --campaign --together: exercise the first-area hint with partner-only then host Accept; requires at least600 frames")
     parser.add_argument("--selftest", action="store_true", help="Own parser/environment fixtures only; no game launch")
     args = parser.parse_args(argv)
+    live_join_after_tick_explicit = args.live_join_after_tick is not None
+    if args.live_join_after_tick is None:
+        args.live_join_after_tick = 600
     if args.selftest:
         return selftest()
     if args.name and not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", args.name):
@@ -1318,6 +1627,16 @@ def main(argv=None):
         parser.error("--rejoin-in-mission requires --join-at-hub and excludes --rejoin")
     if args.live_first_join and (not args.campaign or not args.join_at_hub or args.rejoin or args.rejoin_in_mission):
         parser.error("--live-first-join requires --campaign --join-at-hub and excludes --rejoin/--rejoin-in-mission")
+    if (live_join_after_tick_explicit or args.live_join_area or args.live_start_area) and not args.live_first_join:
+        parser.error("--live-join-after-tick/--live-join-area/--live-start-area require --live-first-join")
+    if not 0 <= args.live_join_after_tick <= 60000:
+        parser.error("--live-join-after-tick must be 0..60000")
+    if args.cancel_live_join and not args.live_first_join:
+        parser.error("--cancel-live-join requires --live-first-join")
+    if args.reject_live_history and not args.live_first_join:
+        parser.error("--reject-live-history requires --live-first-join")
+    if args.reject_live_history and (args.cancel_live_join or args.rejoin or args.rejoin_in_mission):
+        parser.error("--reject-live-history excludes --cancel-live-join and rejoin modes")
     if args.live_first_join:
         args.live_join = True
     elif args.live_join and (not args.campaign or not args.join_at_hub or not args.rejoin_in_mission):

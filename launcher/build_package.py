@@ -49,11 +49,11 @@ This package is unfinished and is not a release.
 How to play: the host clicks the big red HOST button. The game opens and a lobby
 code appears in the launcher; the host sends it to the friend and plays (New Game
 or Continue; saves are kept in the package's profile folder). The friend pastes
-the code ("Paste code") and clicks the big blue JOIN button, without opening the
-game first: their game opens, starts by itself, takes over
-the host's campaign progress and appears in the Helicarrier hub. From there the
-host walks to the mission computer and both play the missions together, each
-with their own keyboard or controller. The host can point and click in menus.
+the code ("Paste code") and clicks the big blue JOIN button. Their game catches
+up with the host's current mission, then joins that mission. The host waits
+briefly while the friend catches up. Joining happens at the next normal gameplay
+point, after any pause or cutscene; the area does not restart. Each player uses
+their own keyboard or controller. The host can point and click in menus.
 During missions, only the host controls hints, pause and other game popups;
 the friend's menu presses and cursor are ignored on both PCs.
 
@@ -93,12 +93,13 @@ host picks New Game, the host's game waits a moment until the friend's game is
 back in its main menu, then you both watch the opening and play on together (each
 PC keeps its own saves: the host chooses a slot and confirms any overwrite;
 the friend uses their first empty slot. If the friend has no empty slots,
-New Game is canceled without replacing their saves). If the host picks Continue instead, the
-friend joins in the Helicarrier as usual. If the host is already playing when the
-friend joins, the host returns to the Helicarrier to meet them. If the host was
-in a mission, both resume from the start of the host's area (boss arenas use
-the preceding area). This restarts that area; it does not preserve every enemy
-or the exact moment the friend disconnected.
+New Game is canceled without replacing their saves). If the host picks Continue,
+the friend catches up and joins the current mission. Mid-mission joining replays
+the mission history retained by the host, up to one hour, so this is not an
+instant snapshot of the current world. The host waits while that catch-up runs.
+The join takes effect at the next normal gameplay point after a pause or cutscene.
+Joining throughout the full campaign remains unverified; see the release notes
+for the specific joining cases checked for this build.
 
 In the Helicarrier during co-op, Escape does nothing (its pause menu only offers
 dropping player 2 or quitting, which would break the session). To stop, click
@@ -252,6 +253,8 @@ def player_readme() -> str:
     text = head + tail
     text = text.replace("# Spider-Man: Friend or Foe — private research prototype",
                         "# Spider-Man: Friend or Foe — online co-op (player edition)")
+    text = text.replace("This package is unfinished and is not a release.",
+                        "This is a beta player build. Both players must use the same release.")
     return text.replace("Tested only with bots on one PC", "Tested only with automated tests on one PC") + (
         "\nPlayer edition: this package has no automated connection test, test bots or\n"
         "scripted controls; the add-on refuses to start if one is requested.\n")
@@ -298,7 +301,7 @@ def build(root: Path, name: str, baseline_sha: str = BASELINE_SHA, player: bool 
     destination.mkdir()  # Atomic refusal to reuse a concurrent/existing output.
     manifest = {
         "schema": "fof-private-package-v1",
-        "status": "unfinished-private-research",
+        "status": "beta-player-build" if player else "unfinished-private-research",
         "edition": "player" if player else "research",
         "files": {p: {"size": len(data), "sha256": digest(data)}
                   for p, data in sorted(payload.items())},
@@ -316,7 +319,7 @@ def build(root: Path, name: str, baseline_sha: str = BASELINE_SHA, player: bool 
     for relative, data in payload.items():
         if (destination / relative).read_bytes() != data:
             raise Rejected("Package readback mismatch")
-    return {"status": "private-research-package-created", "files": len(payload),
+    return {"status": "player-package-created" if player else "private-research-package-created", "files": len(payload),
             "bytes": sum(map(len, payload.values())), "package": name}
 
 

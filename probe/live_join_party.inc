@@ -102,7 +102,7 @@ static bool liveJoinSetPartyMode(unsigned mode) {
     DWORD movie=readWord(0x6a9980);
     if(!flow||!transition||!captureGameMode(nativeMode)||nativeMode[0]!=0||
        readWord(flow+8)!=128||readWord(flow+0xc)!=128||readWord(transition+0x2c)!=0||
-       !localStreamDone()||(movie&&readWord(movie+4)==1)||
+       (movie&&readWord(movie+4)==1)||
        !liveJoinPartyCapture(before)){
         log("LIVE_PARTY MODE_BUSY tick=%u reason=mission_not_idle_or_party_unreadable flow=%lu/%lu mode=%lu stage=%lu nis_loaded=%u stream_done=%u movie=%lu actors=%lu",networkTick,
             readWord(flow+8),readWord(flow+0xc),nativeMode[0],readWord(transition+0x2c),localNisLoaded(),localStreamDone(),readWord(movie+4),before.actorListCount);return false;

@@ -4,20 +4,22 @@
 
 Two friends, two Windows game instances, and an independent English or Russian language choice on each PC. This project connects the game's native two-player controls through a synchronized input stream.
 
-**Beta · active development.** Player builds are on the [Releases](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases) page (the newest is v1.0.1-beta; expect some bugs). No game files or Steam libraries are distributed here: you need your own copy of the game. The launcher's play mode uses the native campaign route; the bounded Tokyo scenario remains for automated connection checks.
+**Beta · active development.** Player builds are on the [Releases](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases) page (the newest is v1.1.0-beta; expect some bugs). No game files or Steam libraries are distributed here: you need your own copy of the game. The launcher's play mode uses the native campaign route; the bounded Tokyo scenario remains for automated connection checks.
 
-## Unreleased research: joining an active mission
+## Join an active mission
 
-Source now includes research-gated mid-mission joining that keeps the host in the current area. The incoming game replays recorded mission inputs, verifies state, and takes control of the existing companion after a synchronization pause. English/Russian loopback tests passed both a first join into solo play (1,904 matching frames afterward) and a reconnect (1,866 matching frames afterward), with clean exits and no host area restart.
+**v1.1.0-beta** lets a friend join or reconnect in the host's current mission without a trip to the Helicarrier or an area restart. The host waits while the incoming game reconstructs the mission from recorded inputs, verifies its state, and takes over the existing companion. Admission waits until ordinary gameplay if a pause or cutscene is active.
 
-This feature is **not in the v1.0.1-beta download**. Later areas/bosses, connection and cancellation cases, and player packaging remain unfinished. See [status and remaining work](docs/STATUS.md#unreleased-mid-mission-joining) and [research test commands](docs/TESTING.md#unreleased-live-mission-admission).
+English/Russian automated checks passed first arrival under simulated bad internet (1,904 matching frames afterward), swapped-character reconnect (1,898), and joining inside Doc Ock's arena after its native area transition and introduction (1,887). Cancellation and exhausted history kept the host playing. These are local automated checks, not a new two-PC Steam or physical-controller certification.
 
-## Current state (2026-10-26, v1.0.1-beta)
+Catch-up is not an instant snapshot: longer histories take longer to reconstruct. Up to one hour of simulation history is retained per mission. An unverifiable or unavailable history refuses the join while preserving the host's game; it never falls back to restarting the area. Both players must use the same release. See [verified results and limits](docs/STATUS.md), [test procedures](docs/TESTING.md#live-mission-admission), and [remaining work](docs/ROADMAP.md).
+
+## Current state (2026-10-27, v1.1.0-beta)
 
 The campaign route runs end to end in automated tests: New Game or Continue on the host, the Helicarrier hub, the mission computer, missions and the return to the hub. A test runner that shortens each mission to its ending played **the whole campaign, all 20 missions, in one co-op run** (60,000 frames, Tokyo 1 to the final Venom fight), with all seven bosses (Doc Ock, Green Goblin, Sandman, Scorpion, Rhino, Mysterio, Venom); level exits, boss intro cutscenes, results screens and the recorded progress were identical on both games after every mission. Most regions were also checked over a simulated bad connection (240 ms round trip, jitter, a 600 ms freeze every 10 s). Two crashes that are in the game's own code are repaired at start-up by the add-on, only when the exact broken bytes are present: Mysterio's laser (its code was overwritten by an old no-CD loader stub in this Game.exe build) and an empty draw-list entry in Transylvania 3.
 
 - **Launcher:** two big buttons, HOST and JOIN, in 11 languages. HOST opens the host's game and the lobby; the friend pastes the code and clicks JOIN, and their game opens and connects by itself. Import ("Locate game install") links the game files instead of copying them.
-- **Two ways in, chosen automatically:** if the friend joins while the host is still in the main menu, both start together and watch the opening (the host picks New Game). If the host picks Continue or is already playing, the friend's game catches up and appears next to the host in the Helicarrier. A friend who leaves can rejoin there.
+- **Two ways in, chosen automatically:** if the friend joins while the host is still in the main menu, both start together and watch the opening (the host picks New Game). If the host is in the Helicarrier, the friend joins there. If the host is in a mission, the friend catches up and takes over the companion in that mission. A friend who leaves can rejoin.
 - **Player 2:** the friend plays the campaign's chosen sidekick and can pick another unlocked one at the sidekick computer. In a mission, either player holds TAB for half a second to swap characters.
 - **Cutscenes:** each player may skip or watch; the one ahead waits with a "Waiting for your partner…" box until the other catches up.
 - **Settings:** Audio Settings are also in the main menu's Options; keyboard players start with the game's Laptop controls layout; the game's settings are kept between launches. The game runs at 60 frames per second, alone and in co-op.
@@ -26,7 +28,7 @@ All of this was checked with bots on one PC with a mock Steam relay. Players hav
 
 ## Changes in v1.0.1-beta
 
-The working tree uses wire protocol 5 to exchange the host's in-mission cursor alongside delayed inputs. A first-area English/Russian regression now checks the actual tutorial hint: the friend's attempts are ignored and the host's click closes the hint on both games at the same tick. This release includes the revised save-slot handling, normal session close and mission rejoin. See [Status](docs/STATUS.md) for verified results and remaining checks. Both players must use the same protocol version.
+v1.0.1-beta uses wire protocol 5 to exchange the host's in-mission cursor alongside delayed inputs. A first-area English/Russian regression now checks the actual tutorial hint: the friend's attempts are ignored and the host's click closes the hint on both games at the same tick. This release includes the revised save-slot handling, normal session close and mission rejoin. See [Status](docs/STATUS.md) for verified results and remaining checks. Both players must use the same protocol version.
 
 ## What has been demonstrated
 
@@ -44,20 +46,20 @@ Earlier **run 033** failed on both clients during native startup, before gamepla
 
 ## How far along?
 
-**About 85 / 100 toward a first playable release** (updated 2026-10-26, v1.0.1-beta). This is an engineering judgement about milestones, not a measured coverage percentage or a delivery date.
+**About 90 / 100 toward the intended co-op experience** (updated 2026-10-27, v1.1.0-beta). This is an engineering judgement about milestones, not a measured coverage percentage or a delivery date.
 
 What works in automated tests (bots, one PC, mock Steam relay):
 
 - The campaign route end to end: New Game or Continue, the Helicarrier, the mission computer, missions and the return to the Helicarrier.
 - The whole campaign (20 missions, 7 bosses) shortened to each mission's ending, in sync in one run; most regions also over a simulated bad connection.
-- Starting together from the main menu (both watch the opening) or joining the host in the Helicarrier; a friend who leaves can rejoin.
+- Starting together from the main menu, joining in the Helicarrier, and joining or reconnecting inside an active mission.
 - Picking the friend's sidekick, swapping characters with TAB, native pause, cutscenes skipped at different times.
 - A player launcher in 11 languages with HOST / JOIN, published as alpha and beta releases; game settings are kept between launches.
 
-What is still missing before a first playable release:
+Remaining work:
 
 - Whole missions played start to finish by real players on two PCs (so far: the first Tokyo mission).
-- Saving the shared campaign from both sides, real controllers, and reconnecting in the middle of a mission.
+- Shared save/Continue recovery, physical controllers, and a new two-PC Steam check of mid-mission admission. Broader late-mission and long-history join coverage remains to be expanded.
 
 The [score breakdown](docs/STATUS.md#progress-estimate) and [roadmap](docs/ROADMAP.md) explain what remains.
 

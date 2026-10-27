@@ -1,12 +1,28 @@
 # Status and evidence
 
-Snapshot: **26 October 2026**. The latest player pre-release is [v1.0.1-beta](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases/tag/v1.0.1-beta). This document distinguishes earlier beta evidence, the current release changes, automated fixture evidence and user-reported play.
+Snapshot: **27 October 2026**. The player pre-release is [v1.1.0-beta](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases/tag/v1.1.0-beta), scenario 13 / wire protocol 6. Live joining is enabled by default for retail campaigns; research fixtures remain excluded from the player build. Both peers need the same release.
 
-## Unreleased mid-mission joining
+## v1.1.0-beta: mid-mission joining
 
-The owner requested joining without restarting the host's area. Research source now records mission history, reconstructs the incoming client's world, verifies sampled state at every tick and hands over the existing companion in place. Check 522 passed a first-area reconnect at tick 655 with 1,866 matching frames afterward. Check 524 passed a friend's first arrival into solo play at tick 857 with 1,904 matching frames afterward. Both cases had clean game/launcher exits, and the host did not leave or reload its area. Separate fresh-client replay and altered-state rejection checks passed too.
+The release records a bounded mission history, reconstructs the incoming client's world, verifies each recorded state sample, and admits the guest into the current mission without restarting the area. The published v1.0.1-beta does not contain this feature. Historical checks 522/524 remain first-area research proof only; do not count them as candidate release verification.
 
-This is still research-gated and absent from the published player ZIP. Later areas/bosses, timing and cancellation edges, bounded-history failure handling and normal player packaging remain to be completed. Protocol 6 research builds cannot connect to the published protocol 5 release.
+| Check | Result and scope |
+| --- | --- |
+| 525 | **FAIL:** launcher restriction stopped the attempt before the game started; no gameplay evidence. |
+| 526–528 | **FAIL / no pass credit:** first-chance Windows UI Automation exceptions were misclassified as faults, producing false-positive failures. |
+| 529 | **FAIL / no frame credit:** negative quiet-sample harness bug; keep the run failed. |
+| 530 | **PASS:** guest closed after entering CATCHUP; host canceled admission at tick 857 and continued 463 ticks. Both games and launchers exited 0; no forced cleanup. |
+| 531 | **PASS:** 300-frame history cap disabled recording at tick 301; a guest was refused at tick 632 and self-closed through STOP. Host continued 448 ticks; both games and launchers exited 0; no forced cleanup. |
+| 532 | **PASS:** first join under configured 120 ms delay, 40 ms jitter and 600 ms stalls every 10 seconds. All 857 replay ticks matched; admission completed at 857 with 1,904 matching post-admission frames; negotiated delay was 14 frames. Both games and launchers exited 0, no forced cleanup; elapsed 294.547 s. |
+| 533 / 534 | **FAIL / not run:** 533 completed ordinary reconnect, but its required swap was ignored during a cutscene; no swap pass credit. The sequence stopped before 534. |
+| 535 | **PASS:** corrected swap occurred at tick 235 before disconnect; admission completed at 743 after all 743 replay ticks matched, then 1,898 post-admission frames matched. Both games and launchers exited 0; no forced cleanup; elapsed 310.610 s. |
+| 536–542 | **FAIL:** initial Doc Ock joins were blocked by stale NIS stream state during an otherwise idle mission; the join guard now requires normal gameplay flow, mode 0, transition stage 0 and no movie, without requiring stream completion while idle. Follow-up cross-area failures at ticks 617–618 showed matching RNG but early local controls; pacing/outside-exit experiments were removed after identifying the native loading-VM readiness gate. |
+| 543–546 | **FAIL:** first join hit stale readiness at tick 601; another replay matched through 666 but missed the NIS start at 667. The NIS gate now samples agreed readiness and local-loaded state against the replay. A fresh host caught the guest's local VM readiness too late at tick 617; a further failure used the wrong frame index. These runs earn no pass credit. |
+| 547 | **PASS:** offline Russian replay of the retained host capture from 545 matched all 2,074 history frames, including the Tokyo 2/1-to-3 native exit and full Doc Ock intro. Game and launcher exited 0. This validates replay of that saved history, not a live cross-area join. |
+| 548 | **PASS:** host remained in Doc Ock’s arena after the native Tokyo 2/1-to-3 exit and intro. All 2,074 replay frames matched; admission completed at 2,074, then 1,887 post-admission frames matched. Both games and launchers exited 0; no forced cleanup; elapsed 318.157 s. |
+| 549 | **PASS:** player-edition campaign opened with live joining enabled, then closed normally (game/launcher exit 0); a bot request was refused before attachment. No native fault or forced cleanup. |
+
+Native loading-VM readiness is now the basis for the controls-release gate: replay uses recorded-frame readiness, falling/rising edges, and an index that accounts for the tick advancing before simulation. The current exception handler reports ordinary MSVC C++ first-chance notifications as `CPP_FIRST_CHANCE` and returns `CONTINUE_SEARCH`; these notifications alone are not fault evidence. Unhandled exceptions, nonzero exits, native faults, `NET FAIL` markers and state-oracle mismatches still fail a gate. The release checks include the live boss-area admission and player-edition smoke below. New mid-mission admission over two real Steam PCs and physical controllers remain unverified. These bounded local results do not certify every later mission or long history.
 
 ## Published beta and later campaign evidence
 
@@ -118,7 +134,7 @@ The three area swaps are controlled fixtures. They are useful transition coverag
 
 ## Progress estimate
 
-The current estimate remains **about 85 / 100 toward the intended playable co-op experience** (26 October 2026, v1.0.1-beta). This is engineering judgement about milestones, not measured test coverage, a claim of 85% campaign completion, or a delivery forecast. The fixes above do not automatically increase it.
+The current estimate is **about 90 / 100 toward the intended co-op experience** (27 October 2026, v1.1.0-beta). This is engineering judgement about milestones, not measured test coverage, a claim of 90% campaign completion, or a delivery forecast. Live joining is delivered; shared save recovery, broader two-PC/hardware validation and long-history coverage remain.
 
 For history, the earlier v0.1.6-alpha-player estimate was **63 / 100** on 24 October (previously 40), using this breakdown:
 

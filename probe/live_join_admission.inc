@@ -2,6 +2,8 @@
 // The host waits at the next input boundary with its existing world intact.
 static ULONGLONG liveJoinDeadline=0;
 static coop::live_join::Offer liveJoinOffer;
+static bool liveJoinAdmissionChangedPartyMode=false;
+static unsigned liveJoinAgreedDelay=6;
 
 static bool liveJoinPump(){
     MSG message;while(PeekMessageW(&message,0,0,0,PM_REMOVE)){TranslateMessage(&message);DispatchMessageW(&message);}
@@ -38,8 +40,14 @@ static bool liveJoinSendBlob(const std::vector<std::uint8_t>& bytes){
     CloseHandle(thread);return !canceled&&task.result;
 }
 static void liveJoinAbandonHost(const char* reason){
+    if(liveJoinAdmissionChangedPartyMode&&!campaignStopping()){
+        if(liveJoinSetPartyMode(coop::live_join::kPartyModeNativeAi)){livePartyMode=coop::live_join::kPartyModeNativeAi;
+            log("LIVE_JOIN CANCELED restored_native_ai=1");}
+        else log("LIVE_JOIN CANCELED restore_native_ai_failed=1 host_gameplay_continues=1");
+        liveJoinAdmissionChangedPartyMode=false;
+    }else liveJoinAdmissionChangedPartyMode=false;
     campaignWaitNotice(false);log("LIVE_JOIN CANCELED tick=%u reason=%s preserved=1",networkTick,reason);
-    networkWire->Close();networkRole=0;networkReady=false;networkDeferred=true;
+    networkWire->RequestStop();networkWire->Close();networkRole=0;networkReady=false;networkDeferred=true;
     campaignJoinPending=campaignJoinSent=campaignJoinReceived=campaignJoined=false;
     campaignPhaseSequence=0;networkAgreedDelay=0;liveRecordSoloActive=true;
 }
@@ -50,11 +58,36 @@ static coop::PhaseState liveJoinCheckpoint(unsigned id){
 static bool liveJoinCheckpointEqual(const coop::PhaseState& own,const coop::PhaseState& peer){
     return coop::CampaignPhaseEqual(own,peer);
 }
+static bool liveJoinAdaptiveDelay(unsigned& agreed){
+    const auto ping=liveJoinCheckpoint(0x31003);coop::PhaseState peer={};double samples[6]={};
+    for(unsigned i=0;i<7;i++){
+        const double began=milliseconds();
+        if(!liveJoinPhase(ping,peer)||!liveJoinCheckpointEqual(ping,peer))return false;
+        const double elapsed=milliseconds()-began;
+        if(i)samples[i-1]=elapsed;
+    }
+    // The 90th percentile of six samples uses the nearest-rank maximum.
+    double p90=samples[0];for(unsigned i=1;i<6;i++)if(samples[i]>p90)p90=samples[i];
+    unsigned local=(unsigned)ceil(p90/(2.0*16.6666667))+2u;
+    if(local<6)local=6;if(local>14)local=14;
+    coop::PhaseState choice={};choice.kind=coop::phaseLoad;choice.id=0x31004;choice.flags=coop::phaseReady;
+    choice.selection=local;choice.content=networkContent;
+    if(!liveJoinPhase(choice,peer)||peer.kind!=coop::phaseLoad||peer.id!=0x31004||peer.flags!=coop::phaseReady||
+       peer.selection<6||peer.selection>14||peer.identity!=choice.identity||peer.auxiliary[0]!=0||
+       peer.auxiliary[1]!=0||peer.auxiliary[2]!=0||peer.auxiliary[3]!=0||peer.auxiliary[4]!=0||
+       peer.auxiliary[5]!=0||peer.auxiliary[6]!=0||peer.auxiliary[7]!=0)return false;
+    agreed=local>peer.selection?local:peer.selection;
+    if(!networkWire->SetDelay(agreed))return false;
+    log("LIVE_JOIN INPUT_DELAY frames=%u local=%u p90_rtt_ms=%.2f",agreed,local,p90);
+    return true;
+}
 static void liveJoinFinishAdmission(){
     if(liveAdmissionClient){campaignLoadSequence=liveJoinOffer.loadSequence;campaignCycle=liveJoinOffer.cycle;campaignCycleStartTick=liveJoinOffer.cycleStartTick;}
-    liveWireBaseTick=networkTick;networkAgreedDelay=6;
+    liveWireBaseTick=networkTick;networkAgreedDelay=liveJoinAgreedDelay;
+    networkSwapHeld=0;networkSwapLatched=false;
     campaignJoinPending=false;campaignJoinSent=campaignJoinReceived=campaignJoined=true;
     liveRecordSoloActive=liveReplayRequested=liveReplayRunning=liveReplayFinished=liveAdmissionClient=false;
+    liveJoinAdmissionChangedPartyMode=false;
     campaignGameplay=campaignMission=campaignPrepared=true;networkWire->SetTimeout(30000);
     campaignWaitNotice(false);log("LIVE_JOIN COMPLETE tick=%u preserved=1",networkTick);
 }
@@ -82,12 +115,22 @@ static bool liveJoinReceiveOffer(const coop::PhaseState& offer){
     return true;
 }
 static void liveJoinBeforeInput(){
-    if(!liveJoinTest)return;
+    if(!liveJoinEnabled())return;
+    if(liveJoinTest&&networkRole==1&&campaignJoinPending&&networkTick%120==0){
+        DWORD flow=readWord(0x69e72c),mode[3]={};captureGameMode(mode);
+        log("LIVE_JOIN WAIT_DIAGNOSTIC tick=%u ready=%u sent=%u solo=%u gameplay=%u mission=%u pending_frame=%u valid=%u frames=%u flow=%lu/%lu mode=%lu stream_done=%u",
+            networkTick,networkReady?1u:0u,campaignJoinSent?1u:0u,liveRecordSoloActive?1u:0u,
+            campaignGameplay?1u:0u,campaignMission?1u:0u,liveRecordPending?1u:0u,liveJournal.IsValid()?1u:0u,
+            (unsigned)liveJournal.Size(),readWord(flow+8),readWord(flow+0xc),mode[0],localStreamDone()?1u:0u);
+    }
     if(liveAdmissionClient&&liveReplayFinished){
         auto state=liveJoinCheckpoint(0x31001);coop::PhaseState peer={};
         if(networkTick!=liveJoinOffer.tick||networkState!=liveJoinOffer.checkpoint||livePartyMode!=liveJoinOffer.partyMode||
            !liveJoinPhase(state,peer)||!liveJoinCheckpointEqual(state,peer)){
             log("LIVE_JOIN REJECT reason=catchup_checkpoint");campaignWaitNotice(false);liveJoinResearchClose();return;
+        }
+        if(!liveJoinAdaptiveDelay(liveJoinAgreedDelay)){
+            log("LIVE_JOIN REJECT reason=input_delay_negotiation");campaignWaitNotice(false);liveJoinResearchClose();return;
         }
         if(livePartyMode==0){if(!liveJoinSetPartyMode(1)){log("LIVE_JOIN REJECT reason=client_handoff");liveJoinResearchClose();return;}livePartyMode=1;}
         state=liveJoinCheckpoint(0x31002);
@@ -95,11 +138,17 @@ static void liveJoinBeforeInput(){
             log("LIVE_JOIN REJECT reason=handoff_checkpoint");campaignWaitNotice(false);liveJoinResearchClose();return;}
         liveJoinFinishAdmission();return;
     }
+    if(networkRole==1&&networkReady&&campaignJoinPending&&!campaignJoinSent&&liveRecordSoloActive&&
+       (!liveJoinHistoryUsable||!liveJournal.IsValid()||!liveJournal.Size())){
+        liveJoinAbandonHost("history_unavailable");return;
+    }
     if(networkRole!=1||!networkReady||!campaignJoinPending||campaignJoinSent||!liveRecordSoloActive||
        !campaignGameplay||!campaignMission||liveRecordPending||!liveJournal.IsValid()||!liveJournal.Size())return;
-    DWORD flow=readWord(0x69e72c),mode[3]={},transition=readWord(0x6a9988);
+    DWORD flow=readWord(0x69e72c),mode[3]={},transition=readWord(0x6a9988),movie=readWord(0x6a9980);
+    // An ended NIS can leave stream state 3 behind during ordinary boss play.
+    // Mode/transition zero establishes the idle boundary; only an active movie blocks it.
     if(readWord(flow+8)!=128||readWord(flow+0xc)!=128||!captureGameMode(mode)||mode[0]!=0||
-       !transition||readWord(transition+0x2c)!=0||!localStreamDone())return;
+       !transition||readWord(transition+0x2c)!=0||(movie&&readWord(movie+4)==1))return;
     liveJoinDeadline=GetTickCount64()+300000;
     auto checkpoint=liveJoinCheckpoint(0x31001);
     networkWire->SetTimeout(300000);
@@ -109,13 +158,15 @@ static void liveJoinBeforeInput(){
     auto offer=coop::live_join::MakeOffer(details,networkContent);
     std::vector<std::uint8_t> bytes;coop::PhaseState peer={};
     log("LIVE_JOIN FROZEN tick=%u history=%u preserved=1",networkTick,(unsigned)liveJournal.Size());
-    if(!liveJournal.Encode(bytes)||!liveJoinSaveCapture(bytes)||!networkWire->SetDelay(6)||!liveJoinPhase(offer,peer)||peer.id!=0x30000||
+    if(!liveJournal.Encode(bytes)||(liveJoinTest&&!liveJoinSaveCapture(bytes))||!networkWire->SetDelay(6)||!liveJoinPhase(offer,peer)||peer.id!=0x30000||
        !liveJoinSendBlob(bytes)||!liveJoinPhase(checkpoint,peer)||!liveJoinCheckpointEqual(checkpoint,peer)){
         liveJoinAbandonHost("history_or_checkpoint");return;
     }
     const auto preserved=liveJoinCheckpoint(0x31001);
     if(!liveJoinCheckpointEqual(checkpoint,preserved)){liveJoinAbandonHost("host_changed_while_waiting");return;}
-    if(livePartyMode==0){if(!liveJoinSetPartyMode(1)){liveJoinAbandonHost("host_handoff");return;}livePartyMode=1;}
+    if(!liveJoinAdaptiveDelay(liveJoinAgreedDelay)){liveJoinAbandonHost("input_delay_negotiation");return;}
+    if(livePartyMode==0){if(!liveJoinSetPartyMode(1)){liveJoinAbandonHost("host_handoff");return;}
+        livePartyMode=1;liveJoinAdmissionChangedPartyMode=true;}
     checkpoint=liveJoinCheckpoint(0x31002);
     if(!liveJoinPhase(checkpoint,peer)||!liveJoinCheckpointEqual(checkpoint,peer)){
         liveJoinAbandonHost("handoff_checkpoint");return;}

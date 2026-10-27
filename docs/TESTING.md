@@ -4,11 +4,11 @@ Game QA uses bots and bounded cases. Do not substitute a request for someone to 
 
 Commands below are source entrypoints, checked against the repository. They are not a claim that all commands were rerun for this documentation change. The [status snapshot](STATUS.md) records completed checkpoints and their limits.
 
-The current player pre-release is **v1.0.1-beta**, using scenario 12 / protocol 5. Unreleased research source now uses **protocol 6**, which adds bounded history transfer. Both test peers must use matching builds. Historical results remain tied to their original build; this source is not a new player release.
+The player pre-release **v1.1.0-beta** uses scenario 13 / protocol 6. Production live joining is enabled by default for retail campaigns; the fixture flag is for research builds only. Both test peers need matching builds. The earlier v1.0.1-beta uses scenario 12 / protocol 5.
 
-## Unreleased live mission admission
+## Live mission admission
 
-The research build can reconstruct a joining client's mission from recorded effective inputs, check every recorded state sample, and resume at the host's current tick. The host waits in place; it does not return to the hub or restart an area. Native AI/player transitions preserve existing actors, positions, health and area identity. These paths remain behind research flags while coverage is extended.
+The release reconstructs a joining client's mission from bounded recorded inputs, checks every recorded state sample, and resumes at the host's current tick. The host waits in place; it does not return to the hub or restart an area. Native AI/player transitions preserve existing actors, positions, health and area identity. The completed checks below retain their bounded local scope.
 
 ```powershell
 cmd /c probe\build-live-join-selftest.cmd
@@ -20,9 +20,29 @@ python -I launcher/play_lifecycle.py --name live-first-check --campaign --join-a
 
 Use fresh names. The reconnect fixture closes its initial peer during the mission and launches a fresh replacement. The first-join fixture lets the host complete at least 600 solo frames before connecting the friend. Both require matching completion ticks, a continuing host timeline, no host hub/restart path, matching states after admission and clean exits. Only pre-admission history may contain AI controllers; compared post-admission frames require two human controllers.
 
-Recorded reconnect check **522 passed** in English/Russian over loopback: admission at tick 655, 1,866 matching post-admission frames, both game and launcher exits 0. This establishes the first Tokyo area case, not later areas, bosses, arbitrary pause/cutscene joins, real controllers or a two-PC Steam run. Fresh paired/solo histories and AI/player transition replay checks also passed; altered state records were rejected. See [status](STATUS.md) for release boundaries.
+Recorded reconnect check **522 passed** in English/Russian over loopback: admission at tick 655, 1,866 matching post-admission frames, both game and launcher exits 0. This and first-arrival check 524 are historical first-area research proofs, not candidate release verification; they do not establish later areas, bosses, real controllers or a two-PC Steam admission run. See [status](STATUS.md) for current candidate results.
 
 First-arrival check **524 passed** over English/Russian loopback: the host played solo with native AI before the friend linked, admission completed at tick 857, then both games matched for 1,904 frames. Both game and launcher exits were 0. This uses the same first-area coverage limit.
+
+### Candidate runs and failure accounting
+
+| Check | Recorded result |
+| --- | --- |
+| 525 | **FAIL:** launcher restriction stopped the attempt before game start; no gameplay evidence. |
+| 526–528 | **FAIL / no pass credit:** first-chance Windows UI Automation exceptions were misclassified as faults. |
+| 529 | **FAIL / no frame credit:** negative quiet-sample harness bug. |
+| 530 | **PASS:** guest closed after CATCHUP; host canceled at tick 857 and continued 463 ticks. Both games and launchers exited 0; no forced cleanup. |
+| 531 | **PASS:** 300-frame history cap disabled at tick 301; guest refused at tick 632 and self-closed via STOP. Host continued 448 ticks; both games and launchers exited 0; no forced cleanup. |
+| 532 | **PASS:** first join under 120 ms delay, 40 ms jitter and 600 ms stalls every 10 seconds. All 857 replay ticks matched; admission at tick 857; 1,904 matching post-admission frames; negotiated 14-frame delay. Both games and launchers exited 0, no forced cleanup; elapsed 294.547 s. |
+| 533 / 534 | **FAIL / not run:** the swap fixture fired during a cutscene, so 533 earns no swap pass; the sequence stopped before 534. |
+| 535 | **PASS:** host swapped at tick 235 before disconnect; all 743 replay ticks matched, admission completed at 743, and 1,898 post-admission frames matched. Both games and launchers exited 0; no forced cleanup. |
+| 536–542 | **FAIL:** stale NIS stream state blocked idle Doc Ock admission; then cross-area replay failed at ticks 617–618 with matching RNG but local controls enabled early. Experiments that paced around or exited the area were removed after the native loading-VM readiness gate was identified. |
+| 543–546 | **FAIL:** stale readiness at tick 601, an unrecorded NIS start at 667 after matching through 666, guest local-VM readiness arriving late at 617, and a wrong replay frame index. The NIS gate now uses agreed readiness plus local-loaded state; controls release uses recorded readiness and falling/rising edges with the correct tick-adjusted replay index. |
+| 547 | **PASS:** offline Russian replay of the retained 545 host journal matched all 2,074 frames, including the native Tokyo 2/1-to-3 exit and full Doc Ock intro. Game and launcher exited 0. This is replay validation, not a live cross-area admission pass. |
+| 548 | **PASS:** live admission inside Doc Ock’s arena after the native Tokyo 2/1-to-3 exit and intro; all 2,074 history frames and 1,887 post-admission frames matched. Both games and launchers exited 0; no forced cleanup; elapsed 318.157 s. |
+| 549 | **PASS:** player-edition campaign/live-join startup and normal owned close; game/launcher exit 0, bot request refused before attachment, no native fault or forced cleanup. |
+
+The current handler logs standard MSVC C++ first-chance notifications as `CPP_FIRST_CHANCE` and returns `CONTINUE_SEARCH`; a caught notification alone is not a test failure. Unhandled exceptions, nonzero exits, native faults, `NET FAIL` markers and state-oracle mismatches still fail the gate. Checks 530, 531, 532 and 535 remain bounded passes; 548 passed the live boss-area case and 549 passed the player-edition smoke; their scope remains local.
 
 ## Own-code checks, without the game or an account
 
@@ -116,11 +136,11 @@ python -I launcher/play_lifecycle.py --name rejoin-mission-001 --campaign --join
 
 Rejoin-mission-492 passed a first Tokyo-area restart through the hub. It does not restore the interrupted fight. Bad network, later areas, boss arenas and joining during a cutscene still need separate gates.
 
-## Native save-slot regression candidates: unverified
+## Native save-slot regression fixtures
 
 The working-tree slot-selection/overwrite code has not yet earned a native game pass. Its own-code scorer fixtures do not prove that an occupied save can be safely overwritten. Use only a save generated by an isolated test run, never an owner's profile; the runner validates the seed and stages private copies.
 
-`--slot-fixture` takes a zero-based host row 0, 1 or 2 and requires `--campaign --together`. `--seed-host-slots` and `--seed-peer-slots` accept comma-separated zero-based rows or `none`. A supplied seed defaults to host row 0 and no peer rows. `--overwrite-no` requires a seeded occupied host row and an available peer row. The following are verification candidates, not completed results:
+`--slot-fixture` takes a zero-based host row 0, 1 or 2 and requires `--campaign --together`. `--seed-host-slots` and `--seed-peer-slots` accept comma-separated zero-based rows or `none`. A supplied seed defaults to host row 0 and no peer rows. `--overwrite-no` requires a seeded occupied host row and an available peer row. The following reproduce the focused save-choice regressions; see Status for the completed native Yes/No/full-slot results and their limits:
 
 ```powershell
 # Set this to a native save produced by a previous isolated test.
@@ -159,7 +179,7 @@ Use a new snapshot name. The helper applies independent source membership, file-
 
 ## Live Steam is a separate test boundary
 
-Opening the UI and offline tests do not use an account. Host/Join and explicit `--steam-live` do. The initial account smoke created and left one lobby. Later, the owner reported completing the first Tokyo mission with a friend on two PCs over real Steam; this is user-reported gameplay evidence, not a local automated gate or proof of all later missions. The beta session also exposed the tutorial and save-slot defects now being addressed in the unreleased working tree.
+Opening the UI and offline tests do not use an account. Host/Join and explicit `--steam-live` do. The initial account smoke created and left one lobby. Later, the owner reported completing the first Tokyo mission with a friend on two PCs over real Steam; this is user-reported gameplay evidence, not a local automated gate or proof of all later missions. The beta session also exposed the tutorial and save-slot defects fixed in v1.0.1-beta.
 
 Further account use, invitations or remote-PC tests need their own authorization and bounded evidence. Existing reports do not authorize automated account actions. Do not infer broad WAN readiness from mock transport, ABI fixtures, lobby smoke or one successful mission.
 

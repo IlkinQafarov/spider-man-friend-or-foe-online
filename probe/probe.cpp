@@ -26,7 +26,11 @@ static bool liveRecordTest=false,liveRecordFinished=false,liveRecordPending=fals
 static bool liveRecordSolo=false,liveRecordSoloActive=false;
 static bool livePartyTransitionTest=false;
 static unsigned livePartyMode=0,livePartyTransitionStage=0;
-static bool liveJoinTest=false,liveAdmissionClient=false,liveAdmissionExchanging=false,liveReplayFinished=false;
+static bool liveJoinTest=false,liveSwapTest=false,liveAdmissionClient=false,liveAdmissionExchanging=false,liveReplayFinished=false;
+static bool liveJoinPlayer=false;
+static bool liveJoinEnabled(){return liveJoinTest||liveJoinPlayer;}
+static char liveStartArea[96]="Tokyo/1_Level/1_Area";
+static unsigned liveHistoryMaxFrames=coop::live_join::kMaxFrames;
 static unsigned liveWireBaseTick=0;
 static unsigned liveTraceFrom=~0u;
 static void liveJoinBeforeInput();
@@ -38,6 +42,7 @@ static coop::live_join::Journal liveJournal;
 static coop::live_join::Frame livePendingFrame;
 static unsigned liveReplayIndex=0;
 static void liveJoinRecordStart(const char*,DWORD);
+static bool campaignArea(DWORD,char (&)[33],DWORD&);
 static void liveJoinRecordInput(const coop::Actions&,const coop::Actions&,unsigned,unsigned);
 static void liveJoinAfterState(unsigned);
 static void liveJoinReplayInput();
@@ -593,6 +598,7 @@ static bool captureGameMode(DWORD (&sample)[3]);
 static coop::Actions physicalFixtureActions(bool analog){
     if(campaignMode&&campaignFixture){coop::Actions actions={};
         bool fixtureHost=networkRole==1||liveRecordSolo||liveRecordSoloActive;
+        if(liveSwapTest&&networkRole==1&&networkTick>=200&&networkTick<250)actions[networkSwapAction]=1.0f;
         // Retail New Game shows tutorial hints as native pause mode 1 with a single OK.
         // Host-only accept pulse; lockstep input delivers it to both seats on the same tick.
         DWORD mode[3]={};if(captureGameMode(mode)&&mode[0]==1){
@@ -720,8 +726,20 @@ static void verifyNativeAxes(const coop::Actions& actions){
     for(unsigned i=0;i<4;i++)if(!std::isfinite(native[i])||fabsf(native[i]-expected[i])>0.000001f){networkFailed=true;log("NET FAIL native input oracle tick=%u axis=%u native=%.9g replay=%.9g",networkTick,i,native[i],expected[i]);return;}
     if(networkTick<600&&networkTick%30==0)log("HUMAN AXIS_ORACLE tick=%u mapped=%.9g,%.9g,%.9g,%.9g native=%.9g,%.9g replay=%.9g,%.9g",networkTick,actions[16],actions[17],actions[18],actions[19],native[0],native[1],expected[0],expected[1]);
 }
+static bool networkPrevious[2][28]={};
+static float networkDuration[2][28]={},networkPreviousAxes[2][4]={};
+static void resetMissionInputCache(){
+    memset(networkPrevious,0,sizeof(networkPrevious));memset(networkDuration,0,sizeof(networkDuration));
+    memset(networkPreviousAxes,0,sizeof(networkPreviousAxes));
+    for(unsigned player=0;player<2;player++){
+        BYTE* context=(BYTE*)(0x691170+player*0x11c);
+        memset(context+4,0,28*4);memset(context+0x74,0,28*4);memset(context+0xe4,0,8*4);
+        DWORD wrapper=readWord(0x595390+player*4),mapped=readWord(wrapper+0x3c);
+        if(wrapper&&mapped&&readWord(wrapper)>=28)memset((void*)mapped,0,28*4);
+    }
+}
 static void applyNetworkActions(unsigned player,const coop::Actions& actions){
-    static bool previous[2][28]={0};static float duration[2][28]={0},previousAxes[2][4]={0};
+    auto& previous=networkPrevious;auto& duration=networkDuration;auto& previousAxes=networkPreviousAxes;
     BYTE* context=(BYTE*)(0x691170+player*0x11c);DWORD* states=(DWORD*)(context+4);float* durations=(float*)(context+0x74);
     bool anyAction=false;
     for(unsigned action=0;action<28;action++){bool down=actions[action]>0.5f;states[action]=(down?1u:0u)|(down!=previous[player][action]?2u:0u);duration[player][action]=down==previous[player][action]?duration[player][action]+1.0f/60.0f:0;durations[action]=duration[player][action];previous[player][action]=down;if(states[action])anyAction=true;}
@@ -784,7 +802,7 @@ static bool openNetworkConnection(){
         for(unsigned i=0;i<32;i++){unsigned byte=0;sscanf(digest+i*2,"%2x",&byte);build[i]=(BYTE)byte;}
         if(networkContentVerified)build=networkContent;
         // Private scenario tag: Tokyo1/1, seed8466,60Hz,delay3,combat bot2.
-        scenario[0]=12;scenario[1]=0x21;scenario[2]=0x12;scenario[3]=60;scenario[4]=(BYTE)networkDelay();scenario[5]=networkPathSync?1:0;scenario[6]=networkAmbientSplit?1:0;scenario[7]=humanInputMode?1:0;scenario[8]=humanInputFixture?1:0;
+        scenario[0]=13;scenario[1]=0x21;scenario[2]=0x12;scenario[3]=60;scenario[4]=(BYTE)networkDelay();scenario[5]=networkPathSync?1:0;scenario[6]=networkAmbientSplit?1:0;scenario[7]=humanInputMode?1:0;scenario[8]=humanInputFixture?1:0;
         memcpy(scenario.data()+12,&networkFrameLimit,sizeof(networkFrameLimit));
         unsigned areaHash=0;if(!campaignMode){areaHash=2166136261u;for(const char* c=networkArea;*c;c++)areaHash=(areaHash^(BYTE)*c)*16777619u;}memcpy(scenario.data()+16,&areaHash,sizeof(areaHash));
         scenario[20]=campaignMode?1:0;scenario[21]=campaignFixture?1:0;scenario[22]=campaignJoinPending?1:0;
@@ -812,7 +830,7 @@ static void networkSessionReset();
 static bool campaignPartnerLost(const char* why){
     if(!campaignJoined||networkRole!=1)return false;
     log("NET PARTNER_LOST %s; host continues alone and can Host again",why);
-    if(liveJoinTest&&campaignMission&&campaignGameplay&&liveJournal.IsValid()&&!liveRecordPending){
+    if(liveJoinEnabled()&&campaignMission&&campaignGameplay&&!liveRecordPending){
         networkWire->Close();networkReady=networkFailed=networkComplete=false;networkRole=0;networkDeferred=true;
         campaignJoinPending=campaignJoinSent=campaignJoinReceived=campaignJoined=false;
         campaignAutoTogether=campaignTogetherOffered=campaignTogetherDecided=campaignTogetherJoinerStart=false;
@@ -949,6 +967,7 @@ static void __declspec(naked) streamDoneEntry(){
 }
 static void areaChangeRun(unsigned tick){
     if(!areaChangePending||!networkAreaChangeAgreed||tick<areaChangeQuietUntil)return;
+    if(liveReplayRunning&&!localNextAreaLoaded())return;
     if(!(networkExitAgreed&1)){static unsigned holds=0;if(holds++%120==0)log("NET EXIT_WAIT area change waits for both games to load the next area tick=%u",tick);return;}
     DWORD kind=areaChangePending==~0u?0:areaChangePending;areaChangePending=0;areaChangeQuietUntil=tick+40;areaChangeRunning=true;
     __asm{
@@ -1034,7 +1053,7 @@ static bool localNisLoaded(){
 // Research (COOP_PROBE_NIS_GATE_TEST=1): fake loaded status, host from tick 600, partner from tick 900.
 static bool networkNisGateTest=false;
 static bool __cdecl nisReadyAllowed(){
-    if(liveRecordSoloActive)return localNisLoaded();
+    if(liveRecordSoloActive)return networkNisAgreed&&localNisLoaded();
     if(liveReplayRunning)return networkNisAgreed&&localNisLoaded();
     if(!(campaignMode&&networkLockstep()&&networkInSimulation&&GetCurrentThreadId()==networkSimulationThread))return true;
     static unsigned holds=0;if(!networkNisAgreed&&localNisLoaded()&&holds++%120==0)log("NET NIS_WAIT loaded here, waiting for the partner's cutscene load tick=%u",networkTick);
@@ -1228,7 +1247,7 @@ static void networkInput(){
     if(!networkReady&&!openNetworkConnection())return;
     if(networkFrameLimit&&networkTick>=networkFrameLimit&&(!networkMissionEndFixture||(campaignCycleTarget>1&&campaignCycle+1>=campaignCycleTarget))){networkFinishScript();return;}
     static coop::Actions history[32];coop::Actions local=humanInputMode?captureLocalActions():networkBotActions(networkRole==1?0:1,networkTick),remote={};
-    if(tutorialUiTest||liveRecordTest)local=physicalFixtureActions(false);
+    if(tutorialUiTest||liveRecordTest||liveSwapTest)local=physicalFixtureActions(false);
     // Campaign test bots in real-input runs: the host accepts the results screen after a level end (scene 8), as a player would.
     if(campaignFixture&&humanInputMode&&!humanInputFixture&&networkRole==1&&readWord(readWord(0x6a9940)+0x4e4)==8&&networkTick%60<2)local[10]=1.0f;
     if(campaignMode){bool nis=localNisLoaded();if(networkNisGateTest)nis=networkTick>=(networkRole==1?600u:900u);
@@ -1250,7 +1269,7 @@ static void networkInput(){
     double stepBegan=milliseconds();bool stepped=networkWire->Step(wireTick,local,remote,networkState,&remoteState,&pointer,&remotePointer);if(stepped)frameWaits.add(milliseconds()-stepBegan);
     if(!stepped){
         if(campaignPartnerLost(networkWire->PeerStopped()?"partner closed the game":"connection lost during play")){
-            if(liveJoinTest&&liveRecordSoloActive)liveJoinSoloInput();return;}
+            if(liveJoinEnabled()&&liveRecordSoloActive)liveJoinSoloInput();return;}
         if(networkWire->PeerStopped()){networkComplete=true;applyNetworkActions(0,{});applyNetworkActions(1,{});log("NET peer ended session normally frame=%u; no co-op QA awarded",networkTick);
             if(!gameWindow||!PostMessageW(gameWindow,WM_CLOSE,0,0)){networkFailed=true;log("NET FAIL peer stop close error=%lu",GetLastError());}return;}
         networkFailed=true;log("NET FAIL frame=%u %s",networkTick,networkWire->Error().c_str());applyNetworkActions(0,{});applyNetworkActions(1,{});return;}
@@ -1330,6 +1349,11 @@ static void observePauseFixture(unsigned tick,unsigned actorHash,const DWORD (&m
 }
 static bool liveJoinTraceTick(unsigned tick){return liveJoinTest&&liveTraceFrom!=~0u&&tick>=liveTraceFrom&&tick-liveTraceFrom<10;}
 static void observeNetworkState(unsigned tick,bool checkpoint=false){
+    if(liveJoinEnabled()&&!checkpoint){
+        static DWORD lastArea=0;DWORD currentArea=readWord(readWord(0x6a9974)+0x18);
+        if(currentArea!=lastArea){char path[33]={};DWORD id=0;
+            if(campaignArea(currentArea,path,id)){lastArea=currentArea;log("LIVE_JOIN AREA path=%s tick=%u",path,tick);}}
+    }
     DWORD positions[2][3]={0},slots[2]={~0u,~0u};DWORD manager=readWord(0x6a9900);
     for(unsigned player=0;player<2;player++){
         DWORD handle[3]={0};if(!manager||!readMemory((void*)(manager+0x128+player*12),handle,sizeof(handle))||!handle[1]||handle[2]==~0u)continue;
@@ -1661,7 +1685,7 @@ static bool campaignWaitPhase(unsigned sequence,const coop::PhaseState& state,co
 }
 static bool campaignMenuPending=false;static coop::PhaseState campaignMenuSent;static double campaignMenuSentAt=0;
 static coop::PhaseState campaignExchange(const coop::PhaseState& state){
-    if(!liveAdmissionExchanging&&(liveReplayRequested||liveRecordSolo||(liveJoinTest&&liveRecordSoloActive)))return state;
+    if(!liveAdmissionExchanging&&(liveReplayRequested||liveRecordSolo||(liveJoinEnabled()&&liveRecordSoloActive)))return state;
     if(campaignStopping())return state;
     if(!networkReady&&!openNetworkConnection())campaignReject("transport open");
     // A hub update still in flight (sent, not yet answered) is completed first, so both games keep pairing the same
@@ -1690,7 +1714,7 @@ static coop::PhaseState campaignExchange(const coop::PhaseState& state){
 // with neutral input. A partner still watching a cutscene this player skipped (each PC plays cutscenes on its own)
 // is waited for without a time limit; a dropped link still ends the wait at once.
 static bool campaignMenuExchange(coop::PhaseState& state,coop::PhaseState& peer){
-    if(!liveAdmissionExchanging&&(liveReplayRequested||liveRecordSolo||(liveJoinTest&&liveRecordSoloActive))){peer=state;return true;}
+    if(!liveAdmissionExchanging&&(liveReplayRequested||liveRecordSolo||(liveJoinEnabled()&&liveRecordSoloActive))){peer=state;return true;}
     if(campaignStopping())return false;
     if(!networkReady&&!openNetworkConnection())campaignReject("transport open");
     unsigned sequence=campaignPhaseSequence;int got=0;
@@ -1944,7 +1968,7 @@ static unsigned campaignBytesHash(const BYTE* bytes,unsigned count){unsigned has
 // 45CE49), so its previous area (+14) is used.
 static DWORD campaignResumeArea=0;
 static void campaignHostLeaveMissionForJoin(){
-    if(liveJoinTest)return;
+    if(liveJoinEnabled())return;
     DWORD flow=readWord(0x69e72c),areas=readWord(0x6a9974),manager=readWord(0x6a9988);
     if(!campaignMode||!campaignJoinPending||networkRole!=1||campaignJoinSent||campaignResumeArea||!flow||readWord(flow+8)!=128||readWord(flow+0xc)!=128)return;
     if(!manager||readWord(manager+0x2c)!=0)return;   // wait for ordinary gameplay (no pause, cutscene or area change)
@@ -1973,11 +1997,15 @@ static void campaignHostSendJoin(){
 }
 // Joiner, at its main menu: receive the host's progress once the host has started sending it.
 static bool campaignJoinerReceive(){
-    if(campaignJoinReceived)return true;if(!networkWire->PhaseAvailable(campaignPhaseSequence))return false;
+    if(campaignJoinReceived)return true;
+    if(!networkWire->PhaseAvailable(campaignPhaseSequence)){
+        if(networkWire->PeerStopped()||!networkWire->Error().empty())campaignCloseFromPeer("join_wait",campaignPhaseSequence);
+        return false;
+    }
     BYTE progress[0x1fc]={};
     for(unsigned part=0;part<8;part++){auto peer=campaignExchange(campaignJoinState(0x30000+part));if(campaignStopping())return false;
         if(part==0&&peer.id==0x30200){campaignJoinPending=false;campaignAutoTogether=true;networkWire->SetTimeout(120000);log("CAMPAIGN AUTO_TOGETHER joiner: host is in the main menu; starting together");return false;}
-        if(part==0&&peer.id==0x31000&&liveJoinTest)return liveJoinReceiveOffer(peer);
+        if(part==0&&peer.id==0x31000&&liveJoinEnabled())return liveJoinReceiveOffer(peer);
         if(peer.id!=0x30000+part)campaignReject("join progress part order");campaignJoinUnpack(peer,part,progress);}
     auto done=campaignJoinState(0x30008);done.auxiliary[1]=campaignBytesHash(progress,sizeof(progress));auto peer=campaignExchange(done);if(campaignStopping())return false;
     if(peer.id!=done.id||peer.auxiliary[1]!=done.auxiliary[1])campaignReject("join progress transfer checksum");
@@ -2835,7 +2863,7 @@ static void campaignBeforeLoad(){
     if(campaignStopping())return;
     char path[33]={};DWORD id=0;if(!campaignArea(readWord(readWord(0x6a9974)+0x1c),path,id))campaignReject("unknown requested retail descriptor");
     if(liveReplayRequested&&liveJoinReplayBeforeLoad(path,id))return;
-    if((liveRecordSolo||liveJoinTest)&&liveJoinSoloBeforeLoad(path,id))return;
+    if((liveRecordSolo||liveJoinEnabled())&&liveJoinSoloBeforeLoad(path,id))return;
     if(campaignJoinPending){
         if(networkRole==2&&campaignJoinReceived&&id==97){
             // Keep this PC's own settings (+1BC..+1C7) and save timestamp (+1E4..); everything else is the host's campaign.
@@ -2885,6 +2913,7 @@ static void campaignBeforeLoad(){
     if(networkTick&&campaignMission&&strcmp(path,campaignMissionPath)&&!strstr(path,"FrontEndHub"))log("CAMPAIGN PRELOAD in-mission area load keeps the shared random state tick=%u",networkTick);
     else{*(DWORD*)0x58cf24=8466;networkAmbientRng=0x84f19a21;}
     log("CAMPAIGN PRELOAD_FORWARD sequence=%u path=%s area=%lu peer_ready=1 original_calls=1",campaignLoadSequence,path,id);
+    if(id!=97&&id==campaignMissionArea&&!strcmp(path,campaignMissionPath)){resetMissionInputCache();networkExitAgreed=0;}
     liveJoinRecordStart(path,id);
 }
 static bool campaignStartGameplay(){
@@ -3054,10 +3083,30 @@ static void __fastcall flowNative(void* vm,void*,unsigned id){
     unsigned n=++flowNativeCalls;if(probeDiagnostics&&(n<=180||id!=lastFlowNative||n%10000==0)){DWORD fields[10]={0},args[4]={0};SIZE_T got=0;
         if(ReadProcessMemory(GetCurrentProcess(),vm,fields,sizeof(fields),&got)&&got==sizeof(fields)&&fields[1]>=16)ReadProcessMemory(GetCurrentProcess(),(void*)(fields[1]-16),args,sizeof(args),&got);
         log("FLOW native count=%u id=%u vm=%p pc=%08lx status=%08lx args=%08lx,%08lx,%08lx,%08lx",n,id,vm,fields[6],fields[9],args[0],args[1],args[2],args[3]);}
-    lastFlowNative=id;if(campaignMode&&(!networkDeferred||liveReplayRequested||liveRecordSolo||liveJoinTest)&&id==23)campaignBeforeLoad();
+    lastFlowNative=id;if(campaignMode&&(!networkDeferred||liveReplayRequested||liveRecordSolo||liveJoinEnabled())&&id==23)campaignBeforeLoad();
     if(campaignStopping()){
         DWORD* flags=(DWORD*)((BYTE*)vm+0x24);*flags=(*flags&~6u)|5u;
         log("CAMPAIGN STOP native dispatcher suppressed id=%u; current VM completed for shutdown",id);return;
+    }
+    // Native134 (4DA94B) waits on the loading VM and enables player controls.
+    // Its raw readiness can arrive between ticks; use the preceding agreed
+    // sample just as the exit/area-change gates do, preserving the VM's yield.
+    DWORD controlFlow=id==134?readWord(0x69e72c):0;
+    if(id==134&&campaignMode&&networkLockstep()&&(liveJoinEnabled()||liveReplayRunning)&&
+       controlFlow&&readWord(controlFlow+8)==128){
+        bool ready=(networkExitAgreed&2)!=0&&localExitUnlocked();
+        if(liveReplayRunning){
+            const auto* next=liveJournal.At(liveReplayIndex);
+            // Control release does not consume the next world's assets. Replay
+            // the sampled falling/rising edges instead of its local VM timing.
+            if(next)ready=(networkExitAgreed&2)!=0&&(next->agreedStatus&2)!=0;
+        }
+        ((void(__stdcall*)(DWORD,DWORD,DWORD))0x45dde5)(readWord(0x6a9900),ready?1u:0u,~0u);
+        BYTE* state=(BYTE*)vm;
+        if(!ready){*(DWORD*)(state+0x18)-=2;*(DWORD*)(state+4)=readWord((DWORD)(ULONG_PTR)state+0x20);}
+        *(DWORD*)(state+0x24)|=7;
+        if(networkTick>=598&&networkTick<=625)log("LIVE_REPLAY CONTROL_GATE tick=%u frame=%u ready=%u raw=%u input_pending=%u in_sim=%u",networkTick,liveReplayIndex,ready?1u:0u,localExitUnlocked()?1u:0u,liveRecordPending?1u:0u,networkInSimulation?1u:0u);
+        return;
     }
     // Flow native 6 loads one FE scene (id on top of the script stack, 4D9121 -> 4E5FFF). The front end loads 17,
     // without the Options/Audio screens the hub has; load those two right after the main menu's own Options (1A).
@@ -3195,6 +3244,22 @@ static bool install() {
 // thread, to find what prepares the sidekick entry in a mission. Armed by raising 0xE0C0FFEE from the hub hook.
 static LONG campaignWatchHits=0;
 static LONG CALLBACK exception(EXCEPTION_POINTERS* p){
+    // A vectored handler sees C++ throws before the program's catch handlers.
+    // Record that notification separately from SEH faults; do not swallow it.
+    // Unhandled throws still produce a nonzero process exit and fail lifecycle QA.
+    if(p&&p->ExceptionRecord&&p->ExceptionRecord->ExceptionCode==0xe06d7363&&
+       p->ExceptionRecord->NumberParameters==3&&p->ExceptionRecord->ExceptionInformation[0]==0x19930520){
+        static LONG observed=0;
+        if(InterlockedIncrement(&observed)<=32){
+            DWORD type=(DWORD)p->ExceptionRecord->ExceptionInformation[2];
+            MEMORY_BASIC_INFORMATION memory={};char module[MAX_PATH]={};
+            if(type&&VirtualQuery((void*)type,&memory,sizeof(memory))&&memory.AllocationBase)
+                GetModuleFileNameA((HMODULE)memory.AllocationBase,module,MAX_PATH);
+            log("CPP_FIRST_CHANCE thread=%lu type=%08lx type_module=%s normal_windows_handling=1",
+                GetCurrentThreadId(),type,module);
+        }
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
     if(campaignHubSpawnIndex>=0&&p&&p->ExceptionRecord&&p->ContextRecord){
         auto e=p->ExceptionRecord;auto c=p->ContextRecord;
         if(e->ExceptionCode==0xE0C0FFEE){c->Dr0=0x6a8880;c->Dr7=(c->Dr7&~0xf0003ul)|1ul|(1ul<<16)|(3ul<<18);c->ContextFlags|=CONTEXT_DEBUG_REGISTERS;log("HUBSPAWN watch armed on entry 1 owner thread=%lu",GetCurrentThreadId());return EXCEPTION_CONTINUE_EXECUTION;}
@@ -3292,7 +3357,17 @@ BOOL WINAPI DllMain(HINSTANCE h,DWORD why,LPVOID){if(why!=DLL_PROCESS_ATTACH)ret
     {wchar_t option[8]={};DWORD length=GetEnvironmentVariableW(L"COOP_PROBE_LIVE_RECORD_TEST",option,8);if(length){if(length!=1||(option[0]!=L'1'&&option[0]!=L'2'&&option[0]!=L'3'))return FALSE;liveRecordTest=true;liveRecordSolo=option[0]!=L'1';livePartyTransitionTest=option[0]==L'3';}}
     {DWORD length=GetEnvironmentVariableW(L"COOP_PROBE_LIVE_REPLAY_TEST",liveReplaySource,32768);if(length){if(length>=32768)return FALSE;liveReplayRequested=true;}}
     {wchar_t option[8]={};DWORD length=GetEnvironmentVariableW(L"COOP_PROBE_LIVE_JOIN_TEST",option,8);if(length){if(length!=1||option[0]!=L'1'||!campaignFixture||!campaignMode||!humanInputMode||liveRecordTest||liveReplayRequested)return FALSE;liveJoinTest=true;}}
-    if((liveRecordTest||liveReplayRequested)&&(!campaignFixture||!campaignMode||!humanInputMode||humanInputFixture||levelEndTest||tutorialUiTest||liveRecordTest&&liveReplayRequested))return FALSE;
+    {wchar_t option[8]={};DWORD length=GetEnvironmentVariableW(L"COOP_PROBE_LIVE_SWAP_TEST",option,8);
+        if(length){if(length!=1||option[0]!=L'1'||!liveJoinTest)return FALSE;liveSwapTest=true;}}
+    {char option[96]={};DWORD length=GetEnvironmentVariableA("COOP_PROBE_LIVE_START_AREA",option,sizeof(option));
+        if(length){if(length>=sizeof(option)||!liveJoinTest)return FALSE;strcpy_s(liveStartArea,option);}}
+    {wchar_t option[16]={};DWORD length=GetEnvironmentVariableW(L"COOP_PROBE_LIVE_HISTORY_FRAMES",option,16);
+        if(length){wchar_t* end=0;unsigned long value=wcstoul(option,&end,10);
+            if(length>=16||!liveJoinTest||!end||*end||value<60||value>coop::live_join::kMaxFrames)return FALSE;
+            liveHistoryMaxFrames=value;}}
+    // Standalone replay can reproduce an explicitly selected native-exit fixture
+    // from a saved live-join run. Player builds still reject all campaign fixtures.
+    if((liveRecordTest||liveReplayRequested)&&(!campaignFixture||!campaignMode||!humanInputMode||humanInputFixture||(levelEndTest&&!liveReplayRequested)||tutorialUiTest||liveRecordTest&&liveReplayRequested))return FALSE;
     if((liveReplayRequested||liveRecordSolo)&&!networkDeferred)return FALSE;
     wchar_t soloOption[8]={0};DWORD soloLength=GetEnvironmentVariableW(L"COOP_PROBE_SOLO",soloOption,8);if(soloLength){if(soloLength>=8||wcscmp(soloOption,L"1"))return FALSE;soloMode=true;}
     if(soloMode&&(selfTest||autoTest||campaignMode||networkRole||humanInputMode||inputBot||playBot||actionBot||areaLength||networkTransitionFixture||networkPauseFixture||networkMutateFixture||networkMissionEndFixture||!displayMode))return FALSE;
@@ -3312,5 +3387,9 @@ BOOL WINAPI DllMain(HINSTANCE h,DWORD why,LPVOID){if(why!=DLL_PROCESS_ATTACH)ret
        (!campaignMode&&!selfTest))return FALSE;
     log("FOF_PLAYER_EDITION bots and test fixtures disabled");
 #endif
+    // Retail campaigns keep a bounded mission history for an incoming friend's fresh game.
+    // Fixture-only flags remain forbidden by the player edition above.
+    liveJoinPlayer=campaignMode&&!campaignFixture&&!liveRecordTest&&!liveReplayRequested;
+    if(liveJoinPlayer)log("LIVE_JOIN PLAYER enabled=1");
     log("probe attach pid=%lu selftest=%u",GetCurrentProcessId(),selfTest?1:0);if(campaignMode)log("CAMPAIGN CONFIG enabled=1 fixture=%u research_autotest=0",campaignFixture?1u:0u);originalErrno=(decltype(originalErrno))GetProcAddress(GetModuleHandleW(L"MSVCR80.dll"),"_errno");if(!install()){log("FAIL installation; launcher must terminate");return FALSE;}if(!AddVectoredExceptionHandler(1,exception)){log("FAIL exception diagnostic registration");return FALSE;}log("READY pre-entry hooks installed; registry entirely virtual; raw input and timing preserved");return TRUE;
 }

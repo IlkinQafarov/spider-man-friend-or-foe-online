@@ -1,4 +1,10 @@
 // Research execution proof for the live-join timeline. Player builds reject these flags.
+static bool liveJoinHistoryUsable=true;
+static void liveJoinDisableHistory(const char* reason){
+    if(!liveJoinHistoryUsable)return;
+    liveJoinHistoryUsable=false;liveRecordPending=false;
+    log("LIVE_JOIN HISTORY_DISABLED tick=%u reason=%s host_gameplay_continues=1",networkTick,reason);
+}
 static DWORD liveJoinReplayArea(){
     const auto& meta=liveJournal.GetMetadata();
     for(unsigned i=0;i<103;i++){DWORD descriptor=readWord(0x584928+i*4),id=0;char path[33]={};
@@ -11,7 +17,7 @@ static bool liveJoinResearchStartAtHub(){
     if(liveReplayPairedBootstrap()&&!campaignHubPlayer2){
         campaignHubPairedCalls=60;campaignHubPartnerUpdate();if(!campaignHubPlayer2)return false;
     }
-    const char* wanted=liveReplayRequested?liveJournal.GetMetadata().areaPath.data():"Tokyo/1_Level/1_Area";
+    const char* wanted=liveReplayRequested?liveJournal.GetMetadata().areaPath.data():liveStartArea;
     DWORD area=0,id=0;char path[33]={};
     for(unsigned i=0;i<103;i++){DWORD candidate=readWord(0x584928+i*4),candidateId=0;char candidatePath[33]={};
         if(campaignArea(candidate,candidatePath,candidateId)&&!strcmp(candidatePath,wanted)){area=candidate;id=candidateId;strcpy(path,candidatePath);break;}}
@@ -36,18 +42,19 @@ static bool liveJoinLoadJournal(){
 }
 static void liveJoinRecordStart(const char* path,DWORD id){
     const bool solo=liveRecordSolo||liveRecordSoloActive;
-    if((!liveRecordTest&&!solo&&!liveJoinTest)||(!solo&&networkRole!=1)||(solo&&networkRole!=0&&!liveJoinTest)||
+    if((!liveRecordTest&&!solo&&!liveJoinEnabled())||(!solo&&networkRole!=1)||(solo&&networkRole!=0&&!liveJoinEnabled())||
        id==97||id!=campaignMissionArea||strcmp(path,campaignMissionPath))return;
     coop::live_join::Metadata meta={};strcpy_s(meta.areaPath.data(),meta.areaPath.size(),path);
     meta.baseTick=networkTick;meta.seed=readWord(0x58cf24);meta.sidekick=readWord(0x69c624);
     meta.partyMode=solo?coop::live_join::kPartyModeNativeAi:coop::live_join::kPartyModeTwoHumans;
     if(!readMemory((void*)0x69c470,meta.missionStartProgress.data(),meta.missionStartProgress.size()))campaignReject("journal initial progress read");
-    liveJournal=coop::live_join::Journal(meta);liveRecordFinished=false;liveRecordPending=false;
-    if(!liveJournal.IsValid())campaignReject("journal initial metadata invalid");
+    liveJournal=coop::live_join::Journal(meta,liveHistoryMaxFrames);liveRecordFinished=false;liveRecordPending=false;
+    liveJoinHistoryUsable=liveJournal.IsValid();
+    if(!liveJoinHistoryUsable)log("LIVE_JOIN HISTORY_DISABLED tick=%u reason=metadata host_gameplay_continues=1",networkTick);
     log("LIVE_RECORD BEGIN base=%u area=%s seed=%u",meta.baseTick,path,meta.seed);
 }
 static bool liveJoinSoloBeforeLoad(const char* path,DWORD id){
-    const bool timelineSolo=liveJoinTest&&(networkDeferred||liveRecordSoloActive)&&networkRole!=2&&!liveReplayRequested;
+    const bool timelineSolo=liveJoinEnabled()&&(networkDeferred||liveRecordSoloActive)&&networkRole!=2&&!liveReplayRequested;
     if(!liveRecordSolo&&!timelineSolo)return false;
     if(id==97){
         if(timelineSolo&&liveRecordSoloActive){
@@ -59,7 +66,7 @@ static bool liveJoinSoloBeforeLoad(const char* path,DWORD id){
     }
     if(!path||!path[0]||strlen(path)>=sizeof(campaignMissionPath))campaignReject("solo mission path invalid");
     if(liveRecordSoloActive){
-        if(!liveJournal.IsValid()||!campaignPrepared||!networkInputClock||liveRecordFinished)
+        if((liveJoinHistoryUsable&&!liveJournal.IsValid())||!campaignPrepared||!networkInputClock||liveRecordFinished)
             campaignReject("solo area load lost prepared journal state");
         if(liveRecordPending)campaignReject("solo area load before prior state observation");
         log("LIVE_RECORD SOLO area load path=%s id=%lu tick=%u keep_clock_rng_journal=1",path,id,networkTick);
@@ -69,18 +76,20 @@ static bool liveJoinSoloBeforeLoad(const char* path,DWORD id){
     if(!campaignMode||(!timelineSolo&&(!liveRecordTest||!liveRecordSolo||networkWire))||networkRole||networkReady||networkInputClock||
        networkTick||networkFailed||networkComplete||campaignPrepared||liveReplayRequested||!flow||readWord(flow+8)!=64)
         campaignReject("solo first load lifecycle guards");
-    if(liveJournal.IsValid()||liveRecordPending||liveRecordFinished)
+    if((liveJoinHistoryUsable&&liveJournal.IsValid())||liveRecordPending||liveRecordFinished)
         campaignReject("solo journal already initialized");
     if(campaignMission&&(campaignMissionArea!=id||strcmp(path,campaignMissionPath)))
         campaignReject("solo selected mission identity changed before load");
     if(!prepareTaskTiming())campaignReject("solo native task timing preparation");
+    resetMissionInputCache();
+    networkExitAgreed=0;
     networkTick=0;networkState=0;networkInputClock=true;
     for(unsigned slot=0;slot<4;slot++)*(DWORD*)(0x691170+slot*0x11c+0x110)=10000;
     *(DWORD*)0x6a98dc=10000;*(DWORD*)0x58cf24=8466;networkAmbientRng=0x84f19a21;
     campaignPrepared=true;campaignMission=true;campaignMissionArea=id;
     if(strcpy_s(campaignMissionPath,sizeof(campaignMissionPath),path))campaignReject("solo mission path copy");
     livePartyMode=0;liveRecordSoloActive=true;liveJoinRecordStart(path,id);
-    if(!liveJournal.IsValid())campaignReject("solo journal did not start");
+    if(!liveJoinHistoryUsable)log("LIVE_JOIN HISTORY_DISABLED tick=%u reason=journal_start host_gameplay_continues=1",networkTick);
     liveRecordSoloActive=true;
     log("LIVE_RECORD SOLO READY tick=%u clock=10000 seed=%u ambient=%08x path=%s id=%lu native_ai=1",
         networkTick,readWord(0x58cf24),networkAmbientRng,path,id);
@@ -88,8 +97,8 @@ static bool liveJoinSoloBeforeLoad(const char* path,DWORD id){
 }
 static void liveJoinRecordInput(const coop::Actions& host,const coop::Actions& partner,unsigned status,unsigned slot){
     const bool solo=liveRecordSoloActive;
-    if((!liveRecordTest&&!solo&&!liveJoinTest)||(!solo&&networkRole!=1)||(solo&&(!liveRecordSolo&&!liveJoinTest))||
-       liveRecordFinished||!liveJournal.IsValid())return;
+    if((!liveRecordTest&&!solo&&!liveJoinEnabled())||(!solo&&networkRole!=1)||(solo&&(!liveRecordSolo&&!liveJoinEnabled()))||
+        liveRecordFinished||!liveJoinHistoryUsable||!liveJournal.IsValid())return;
     if(solo&&livePartyMode==coop::live_join::kPartyModeNativeAi){
         if(slot!=0)campaignReject("solo journal host slot changed");
         for(float value:partner)if(value!=0.0f)campaignReject("solo journal contains partner actions");
@@ -102,8 +111,8 @@ static void liveJoinRecordInput(const coop::Actions& host,const coop::Actions& p
 }
 static void liveJoinSoloInput(){
     if(!liveRecordSoloActive)return;
-    if((!liveRecordSolo&&!liveJoinTest)||(!liveJoinTest&&(networkRole||networkWire))||!campaignMode||!campaignPrepared||
-       !networkInputClock||!liveJournal.IsValid())
+    if((!liveRecordSolo&&!liveJoinEnabled())||(!liveJoinEnabled()&&(networkRole||networkWire))||!campaignMode||!campaignPrepared||
+       !networkInputClock)
         campaignReject("solo input lifecycle guards");
     if(networkFailed||networkComplete||liveRecordFinished){applyNetworkActions(0,{});applyNetworkActions(1,{});
         if(networkFailed&&gameWindow&&!networkCloseRequested){networkCloseRequested=true;log("NET failure requests normal close of owned solo game window");PostMessageW(gameWindow,WM_CLOSE,0,0);}return;}
@@ -118,8 +127,9 @@ static void liveJoinSoloInput(){
             else if(networkTick>=target+300)campaignReject("research native party handoff readiness timeout");
         }
     }
-    if(liveJoinTest&&livePartyMode==1&&!networkSwapped&&liveJoinSetPartyMode(0))livePartyMode=0;
+    if(liveJoinEnabled()&&livePartyMode==1&&!networkSwapped&&liveJoinSetPartyMode(0))livePartyMode=0;
     coop::Actions host=campaignFixture?physicalFixtureActions(false):captureLocalActions(),partner={};
+    if(liveJoinEnabled()&&livePartyMode==coop::live_join::kPartyModeTwoHumans)networkSwapSlot(host,partner);
     if(livePartyTransitionTest&&livePartyMode==coop::live_join::kPartyModeTwoHumans)partner=networkBotActions(1,networkTick);
     bool nis=localNisLoaded();static bool previousNis=true;
     if(previousNis&&!nis)nisLocalLoadStart=networkTick;previousNis=nis;
@@ -150,6 +160,11 @@ static void liveJoinAfterState(unsigned tick){
     if(liveReplayRunning&&!networkComplete){
         const auto* frame=liveJournal.At(liveReplayIndex);
         if(!frame||frame->tick!=tick||frame->postState!=networkState){
+            for(unsigned back=0;back<8&&back<=tick;back++){
+                const auto& part=networkParts[(tick-back)%64];
+                log("LIVE_REPLAY PARTS tick=%u actors=%08x progress=%08x area=%08x mode=%u/%u/%u rng=%08x",
+                    part.tick,part.actors,part.progress,part.area,part.mode,part.previous,part.owner,part.rng);
+            }
             log("LIVE_REPLAY MISMATCH frame=%u tick=%u expected=%016llx actual=%016llx",liveReplayIndex,tick,frame?frame->postState:0,networkState);liveJoinResearchClose();return;
         }
         ++liveReplayIndex;
@@ -157,7 +172,9 @@ static void liveJoinAfterState(unsigned tick){
     }
     if(liveRecordPending){
         if(tick!=livePendingFrame.tick)campaignReject("journal native simulation tick mismatch");
-        livePendingFrame.postState=networkState;if(!liveJournal.Append(livePendingFrame))campaignReject("journal append rejected");liveRecordPending=false;
+        livePendingFrame.postState=networkState;if(!liveJournal.Append(livePendingFrame)){
+            liveJoinDisableHistory("capacity_or_allocation");return;
+        }liveRecordPending=false;
         if(liveRecordTest&&liveJournal.Size()==1800){
             std::vector<std::uint8_t> encoded;if(!liveJournal.Encode(encoded))campaignReject("journal serialization failed");
             wchar_t path[32768];_snwprintf(path,32768,L"%s\\live-join-journal.bin",sandbox);
@@ -185,6 +202,8 @@ static bool liveJoinReplayBeforeLoad(const char* path,DWORD id){
         bool playersReady=meta.partyMode==coop::live_join::kPartyModeNativeAi||prepareNetworkPlayers();
         bool timingReady=prepareTaskTiming();
         if(!playersReady||!timingReady)campaignReject("replay native preparation");
+        resetMissionInputCache();
+        networkExitAgreed=0;
         networkTick=meta.baseTick;networkState=0;networkInputClock=true;networkReady=true;campaignPrepared=true;livePartyMode=meta.partyMode;
         campaignMission=true;campaignMissionArea=id;strcpy(campaignMissionPath,path);
         DWORD clock=10000+(DWORD)((ULONGLONG)networkTick*1000/60);
@@ -204,6 +223,9 @@ static void liveJoinReplayInput(){
         livePartyMode=frame->partyMode;
     }
     unsigned status=frame->agreedStatus;networkNisAgreed=(status&4)!=0;
+    if(networkTick>=607&&networkTick<=625)log("LIVE_REPLAY READINESS tick=%u recorded=%u local=%u mode=%lu pending=%lu",
+        networkTick,status,readyBitsOf(readyBits(localNisLoaded(),localExitUnlocked(),localNextAreaLoaded(),areaChangePending!=0,localStreamDone())),
+        readWord(readWord(0x6a9988)+0x2c),areaChangePending);
     if(!networkNisAgreed)nisAgreedNotReadyAt=networkTick;
     networkAreaChangeAgreed=(status&8)!=0;networkStreamDoneAgreed=(status&16)!=0;networkExitAgreed=status&3;
     appliedMenuPointer=frame->pointer;applyMissionPointer();networkSwapped=frame->hostSlot!=0;
