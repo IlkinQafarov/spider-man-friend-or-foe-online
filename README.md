@@ -4,7 +4,7 @@
 
 Two friends, two Windows game instances, and an independent English or Russian language choice on each PC. This project connects the game's native two-player controls through a synchronized input stream.
 
-**Beta · active development.** Player builds are on the [Releases](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases) page (the newest is v1.1.0-beta; expect some bugs). No game files or Steam libraries are distributed here: you need your own copy of the game. The launcher's play mode uses the native campaign route; the bounded Tokyo scenario remains for automated connection checks.
+**Beta · active development.** Player builds are on the [Releases](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases) page (the newest is v1.2.0-beta; expect some bugs). No game files or Steam libraries are distributed here: you need your own copy of the game. The launcher's play mode uses the native campaign route; the bounded Tokyo scenario remains for automated connection checks.
 
 ## Join an active mission
 
@@ -14,11 +14,11 @@ English/Russian automated checks passed first arrival under simulated bad intern
 
 Catch-up is not an instant snapshot: longer histories take longer to reconstruct. Up to one hour of simulation history is retained per mission. An unverifiable or unavailable history refuses the join while preserving the host's game; it never falls back to restarting the area. Both players must use the same release. See [verified results and limits](docs/STATUS.md), [test procedures](docs/TESTING.md#live-mission-admission), and [remaining work](docs/ROADMAP.md).
 
-## Latest source update (1 November 2026)
+## v1.2.0-beta: launcher and joining update (1 November 2026)
 
 The source now includes an illustrated WPF launcher with a fixed 900x600 window, reversible accessibility mode and a single-EXE bundler. Steam component discovery checks libraries across local drives. The joiner's New Game/Load rows are hidden while waiting for the host, and a host-only friend-joined notification supports all eleven launcher languages.
 
-The packaged UI and extraction/upgrade checks passed. A focused English/Russian game regression passed 601 matching frames and normal exits after the host's automatic New Game choice. These changes are in source; **the v1.1.0-beta release download has not been replaced**. See [launcher build/behavior](docs/LAUNCHER.md) and [current evidence](docs/STATUS.md).
+The packaged UI and extraction/upgrade checks passed. A focused English/Russian game regression passed 601 matching frames and normal exits after the host's automatic New Game choice. These changes are packaged in [v1.2.0-beta](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases/tag/v1.2.0-beta) as a single EXE download; its sibling `FriendOrFoe` folder stores runtime files and player data. Existing v1.1.0-beta assets remain available separately. See [launcher build/behavior](docs/LAUNCHER.md) and [current evidence](docs/STATUS.md).
 
 ## Current state (2026-10-27, v1.1.0-beta)
 

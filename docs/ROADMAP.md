@@ -1,6 +1,6 @@
 # Roadmap
 
-The project has a published **v1.1.0-beta**. Historical evidence includes real players completing Tokyo 1 together over Steam and a shortened co-op run through all 20 mission endings. See [Status](STATUS.md#progress-estimate) for project progress notes and [Testing](TESTING.md) for QA procedures.
+The project has a published **v1.2.0-beta**, adding the fixed-size WPF launcher, accessible UI, cross-drive discovery and host-driven guest menu presentation. Historical evidence includes real players completing Tokyo 1 together over Steam and a shortened co-op run through all 20 mission endings. See [Status](STATUS.md#progress-estimate) for project progress notes and [Testing](TESTING.md) for QA procedures.
 
 ## Delivered: mid-mission joining
 

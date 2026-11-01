@@ -1,10 +1,10 @@
 # Status and evidence
 
-Snapshot: **1 November 2026**. The player pre-release is [v1.1.0-beta](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases/tag/v1.1.0-beta), scenario 13 / wire protocol 6. Live joining is enabled by default for retail campaigns; research fixtures remain excluded from the player build. Both peers need the same release.
+Snapshot: **1 November 2026**. The player pre-release is [v1.2.0-beta](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases/tag/v1.2.0-beta), scenario 13 / wire protocol 6. Live joining is enabled by default for retail campaigns; research fixtures remain excluded from the player build. Both peers need the same release.
 
-## Source update: fixed-size WPF launcher and joiner menu
+## v1.2.0-beta: fixed-size WPF launcher and joiner menu
 
-The source now has a single-EXE bundler, the illustrated WPF layout fixed at 900x600 logical units, eleven UI languages and a reversible accessibility mode. Cross-drive Steam-library fallback discovery retains export/signature checks. A seven-second host-only notification reports validated session connection, without taking focus/input or claiming catch-up has finished. The published v1.1.0-beta asset predates these changes.
+The source now has a single-EXE bundler, the illustrated WPF layout fixed at 900x600 logical units, eleven UI languages and a reversible accessibility mode. Cross-drive Steam-library fallback discovery retains export/signature checks. A seven-second host-only notification reports validated session connection, without taking focus/input or claiming catch-up has finished. These changes ship in v1.2.0-beta; the earlier v1.1.0-beta assets remain unchanged.
 
 Checks run on 1 November 2026:
 
@@ -15,7 +15,9 @@ Checks run on 1 November 2026:
 - Corrected `joiner-menu-hide-005`: **PASS**, English/Russian preflights, 601 matching game frames, six common samples, game/launcher exits 0/0, no forced cleanup. Guest rows 0/1 were filtered, host hide count was zero, and both seats asserted the host-selected native New Game. Native indices and original rendering of Options/Quit stay intact; direct Options/Quit clicks were not separately tested.
 - `joiner-menu-hide-001/002`: **FAIL before game launch**, restricted-environment CreateProcess error 623. `003` passed 601 frames but hooked a base renderer that did not establish hiding. `004`: **FAIL**, temporary cursor relocation opened Options and stalled startup; it was normally closed with zero exits. The cursor change was removed and the actual derived-menu render path was used for `005`. These attempts earn no hiding pass credit.
 
-No new actual Steam/two-PC test, physical-controller test or full-campaign claim is made for this source update. Actual Windows DPI/mixed-monitor changes remain unverified. [Launcher documentation](LAUNCHER.md) explains build, independent art layers, extraction and runtime behavior.
+Fresh v1.2.0-beta player smoke passed normal startup, live-join enablement and clean exit, plus refusal of a bot request before probe attach; no exceptions or forced cleanup. The renamed release EXE is byte-identical to the verified fixed-layout candidate (13,690,880 bytes, SHA-256 `1f02769240c99b43312df694c9b03ff8c0b6a8dabff8dc51d9efa9bf66c79a52`). Its 13 extracted payload files match the tested player package.
+
+No new actual Steam/two-PC test, physical-controller test or full-campaign claim is made for this release. Actual Windows DPI/mixed-monitor changes remain unverified. [Launcher documentation](LAUNCHER.md) explains build, independent art layers, extraction and runtime behavior.
 
 ## v1.1.0-beta: mid-mission joining
 

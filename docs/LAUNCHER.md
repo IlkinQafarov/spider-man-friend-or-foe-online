@@ -12,7 +12,7 @@ The joiner's in-game New Game and Load/Continue rows are hidden while waiting fo
 
 Steam component discovery follows registered libraries across drives and checks conventional Steam/SteamLibrary locations on every ready local fixed/removable drive. It searches installed game folders, not every file on the disk. Every candidate still needs the required x64 exports and a valid Valve signature. Discovery reads files without loading Steam or using an account.
 
-These changes are committed source updates; the existing v1.1.0-beta release asset predates this launcher. Building or publishing source does not replace a release download.
+These changes ship in [v1.2.0-beta](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases/tag/v1.2.0-beta). The earlier v1.1.0-beta download predates this launcher and remains available separately. Future source-only commits do not automatically replace release downloads.
 
 ## Editable artwork
 
