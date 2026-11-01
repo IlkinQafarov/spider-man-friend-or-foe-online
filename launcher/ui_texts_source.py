@@ -664,3 +664,264 @@ T["zh"] = {
     "gameEnglish": "英语",
     "gameRussian": "俄语",
 }
+
+
+# Keep runtime v1.1 admission fixes and comic UI labels in the regeneration source.
+COMIC_UPDATES = {'en': {'title': 'Friend or Foe — online co-op',
+        'hint': 'Host: click Host and send the lobby code. Continue playing; your friend catches up and joins your current '
+                'mission. The game waits while they catch up, then admits them at normal gameplay after any pause or cutscene.\n'
+                'Friend: paste the code and click Join. Your game catches up automatically; wait without pressing anything.\n'
+                'To watch the opening together, both select Start a new campaign together.',
+        'partnerWait': 'Waiting for your partner… Their game is catching up. Play resumes when they join at a normal gameplay '
+                       'point.',
+        'partnerLinkedHost': 'Friend connected. They are catching up and will join your current mission when normal gameplay '
+                             'resumes; the game waits during catch-up.',
+        'partnerLinkedJoin': 'Connected. Your game catches up to the current mission automatically; you join when normal '
+                             'gameplay resumes. Please wait without pressing anything.',
+        'partnerLeft': 'Your friend left. You can keep playing; click Host again to invite them back. They catch up and join '
+                       'your current mission.',
+        'comicHost': 'Host a game',
+        'comicJoin': 'Join a friend',
+        'comicSettings': 'Settings',
+        'comicDetails': 'Details',
+        'comicReady': 'Component found',
+        'comicSetup': 'Setup needed'},
+ 'ru': {'title': 'Friend or Foe — онлайн-кооператив',
+        'hint': 'Хост: нажмите «Создать» и отправьте другу код лобби. Продолжайте играть: друг догонит текущую миссию и '
+                'присоединится. Игра подождёт, пока он догонит, а подключение произойдёт после паузы или заставки, когда '
+                'начнётся обычный игровой процесс.\n'
+                'Друг: вставьте код и нажмите «Подключиться». Игра сама догонит текущую миссию; подождите и ничего не '
+                'нажимайте.\n'
+                'Чтобы вместе посмотреть начало, выберите у обоих «Начать новую кампанию вместе».',
+        'partnerWait': 'Ждём напарника… Его игра догоняет текущую миссию. Игра продолжится, когда он присоединится во время '
+                       'обычного игрового процесса.',
+        'partnerLinkedHost': 'Друг подключился. Он догоняет текущую миссию и присоединится после паузы или заставки; пока игра '
+                             'подождёт.',
+        'partnerLinkedJoin': 'Подключено. Игра автоматически догонит текущую миссию; вы присоединитесь после паузы или заставки. '
+                             'Подождите и ничего не нажимайте.',
+        'partnerLeft': 'Друг вышел. Вы можете продолжать; нажмите «Создать», чтобы пригласить его снова. Он догонит и '
+                       'присоединится к текущей миссии.',
+        'comicHost': 'Создать игру',
+        'comicJoin': 'К другу',
+        'comicSettings': 'Настройки',
+        'comicDetails': 'Подробности',
+        'comicReady': 'Компонент найден',
+        'comicSetup': 'Нужна настройка'},
+ 'tr': {'title': 'Friend or Foe — çevrimiçi co-op',
+        'hint': 'Ev sahibi: «Oda kur»a tıklayıp lobi kodunu arkadaşına gönder. Oynamaya devam et; arkadaşın mevcut göreve '
+                'yetişip sana katılır. Oyun, o yetişene kadar bekler ve katılım ancak duraklatma veya ara sahne bittikten sonra '
+                'normal oynanışta gerçekleşir.\n'
+                'Arkadaş: kodu yapıştırıp «Katıl»a tıkla. Oyunun mevcut göreve otomatik olarak yetişir; bekle ve tuşlara basma.\n'
+                'Açılışı birlikte izlemek için ikiniz de «Yeni kampanyaya birlikte başlayın» seçeneğini işaretleyin.',
+        'partnerWait': 'Arkadaşın bekleniyor… Oyunu mevcut göreve yetişiyor. Normal oynanışta katıldığında oyun devam eder.',
+        'partnerLinkedHost': 'Arkadaş bağlandı. Mevcut göreve yetişiyor; duraklatma veya ara sahne bittikten sonra katılacak. '
+                             'Oyun bu sırada bekler.',
+        'partnerLinkedJoin': 'Bağlandı. Oyunun mevcut göreve otomatik olarak yetişecek; duraklatma veya ara sahne bittikten '
+                             'sonra katılacaksın. Lütfen bekle ve tuşlara basma.',
+        'partnerLeft': 'Arkadaşın ayrıldı. Oynamaya devam edebilirsin; onu yeniden davet etmek için «Oda kur»a tıkla. Mevcut '
+                       'göreve yetişip katılır.',
+        'comicHost': 'Oyun kur',
+        'comicJoin': 'Arkadaşına katıl',
+        'comicSettings': 'Ayarlar',
+        'comicDetails': 'Ayrıntılar',
+        'comicReady': 'Bileşen bulundu',
+        'comicSetup': 'Kurulum gerekli'},
+ 'uk': {'title': 'Friend or Foe — онлайн-кооператив',
+        'hint': 'Хост: натисніть «Створити» й надішліть другу код лобі. Продовжуйте грати: друг наздожене поточну місію та '
+                'приєднається. Гра зачекає, поки він наздожене; приєднання відбудеться під час звичайної гри після паузи чи '
+                'відеоролика.\n'
+                'Друг: вставте код і натисніть «Приєднатися». Гра автоматично наздожене поточну місію; зачекайте й нічого не '
+                'натискайте.\n'
+                'Щоб разом переглянути вступ, виберіть на обох комп’ютерах «Почати нову кампанію разом».',
+        'partnerWait': 'Очікування партнера… Його гра наздоганяє поточну місію. Гра продовжиться, коли він приєднається під час '
+                       'звичайної гри.',
+        'partnerLinkedHost': 'Друг підключився. Він наздоганяє поточну місію та приєднається після паузи чи відеоролика; гра '
+                             'зачекає.',
+        'partnerLinkedJoin': 'Підключено. Гра автоматично наздожене поточну місію; ви приєднаєтеся після паузи чи відеоролика. '
+                             'Зачекайте й нічого не натискайте.',
+        'partnerLeft': 'Друг вийшов. Ви можете продовжувати; натисніть «Створити», щоб запросити його знову. Він наздожене та '
+                       'приєднається до поточної місії.',
+        'comicHost': 'Створити гру',
+        'comicJoin': 'До друга',
+        'comicSettings': 'Налаштування',
+        'comicDetails': 'Подробиці',
+        'comicReady': 'Компонент знайдено',
+        'comicSetup': 'Потрібне налаштування'},
+ 'de': {'title': 'Friend or Foe — Online-Koop',
+        'hint': 'Host: Klicke auf „Host“ und sende deinem Freund den Lobbycode. Spiele weiter; dein Freund holt auf und steigt '
+                'in deine aktuelle Mission ein. Das Spiel wartet, bis er aufgeholt hat; der Beitritt erfolgt nach einer Pause '
+                'oder Zwischensequenz im normalen Spiel.\n'
+                'Freund: Füge den Code ein und klicke auf „Beitreten“. Dein Spiel holt automatisch zur aktuellen Mission auf; '
+                'warte und drücke nichts.\n'
+                'Für den gemeinsamen Auftakt müssen beide „Neue Kampagne gemeinsam starten“ wählen.',
+        'partnerWait': 'Warte auf deinen Partner … Sein Spiel holt zur aktuellen Mission auf. Sobald er im normalen Spiel '
+                       'beitritt, geht es weiter.',
+        'partnerLinkedHost': 'Freund verbunden. Er holt zur aktuellen Mission auf und steigt nach einer Pause oder '
+                             'Zwischensequenz ein; das Spiel wartet solange.',
+        'partnerLinkedJoin': 'Verbunden. Dein Spiel holt automatisch zur aktuellen Mission auf. Du steigst nach einer Pause oder '
+                             'Zwischensequenz ein. Bitte warte und drücke nichts.',
+        'partnerLeft': 'Dein Freund ist gegangen. Du kannst weiterspielen; klicke erneut auf „Host“, um ihn einzuladen. Er holt '
+                       'auf und steigt in deine aktuelle Mission ein.',
+        'comicHost': 'Spiel hosten',
+        'comicJoin': 'Freund beitreten',
+        'comicSettings': 'Einstellungen',
+        'comicDetails': 'Details',
+        'comicReady': 'Komponente gefunden',
+        'comicSetup': 'Einrichtung nötig'},
+ 'fr': {'title': 'Friend or Foe — coop en ligne',
+        'hint': 'Hôte : cliquez sur « Héberger » et envoyez le code du salon à votre ami. Continuez à jouer : il rattrape la '
+                'mission en cours et vous rejoint. Le jeu attend qu’il ait rattrapé son retard ; son arrivée a lieu en jeu '
+                'normal, après une pause ou une cinématique.\n'
+                'Ami : collez le code et cliquez sur « Rejoindre ». Votre jeu rattrape automatiquement la mission en cours ; '
+                'attendez sans appuyer sur les touches.\n'
+                'Pour voir le début ensemble, choisissez tous les deux « Commencer une nouvelle campagne ensemble ».',
+        'partnerWait': 'En attente de votre partenaire… Son jeu rattrape la mission en cours. La partie reprend lorsqu’il '
+                       'rejoint pendant le jeu normal.',
+        'partnerLinkedHost': 'Ami connecté. Il rattrape la mission en cours et vous rejoint après une pause ou une cinématique ; '
+                             'le jeu attend pendant ce temps.',
+        'partnerLinkedJoin': 'Connecté. Votre jeu rattrape automatiquement la mission en cours ; vous rejoindrez après une pause '
+                             'ou une cinématique. Attendez sans appuyer sur les touches.',
+        'partnerLeft': 'Votre ami est parti. Vous pouvez continuer ; cliquez sur « Héberger » pour l’inviter à nouveau. Il '
+                       'rattrapera et rejoindra votre mission en cours.',
+        'comicHost': 'Héberger',
+        'comicJoin': 'Rejoindre un ami',
+        'comicSettings': 'Paramètres',
+        'comicDetails': 'Détails',
+        'comicReady': 'Composant trouvé',
+        'comicSetup': 'Configuration requise'},
+ 'es': {'title': 'Friend or Foe — cooperativo en línea',
+        'hint': 'Anfitrión: pulsa «Crear» y envía el código de sala a tu amigo. Sigue jugando: tu amigo alcanzará la misión '
+                'actual y se unirá. El juego esperará mientras alcanza; se incorporará durante el juego normal, después de '
+                'cualquier pausa o escena.\n'
+                'Amigo: pega el código y pulsa «Unirse». Tu juego alcanzará automáticamente la misión actual; espera sin pulsar '
+                'nada.\n'
+                'Para ver juntos el inicio, ambos deben elegir «Empezar una campaña nueva juntos».',
+        'partnerWait': 'Esperando a tu compañero… Su juego está alcanzando la misión actual. La partida continuará cuando se una '
+                       'durante el juego normal.',
+        'partnerLinkedHost': 'Amigo conectado. Está alcanzando la misión actual y se unirá después de una pausa o escena; el '
+                             'juego esperará mientras tanto.',
+        'partnerLinkedJoin': 'Conectado. Tu juego alcanzará automáticamente la misión actual; te unirás después de una pausa o '
+                             'escena. Espera sin pulsar nada.',
+        'partnerLeft': 'Tu amigo se fue. Puedes seguir jugando; pulsa «Crear» para invitarlo de nuevo. Alcanzará y se unirá a tu '
+                       'misión actual.',
+        'comicHost': 'Crear partida',
+        'comicJoin': 'Unirse a un amigo',
+        'comicSettings': 'Ajustes',
+        'comicDetails': 'Detalles',
+        'comicReady': 'Componente encontrado',
+        'comicSetup': 'Requiere configuración'},
+ 'pt': {'title': 'Friend or Foe — cooperativo online',
+        'hint': 'Anfitrião: clique em «Hospedar» e envie o código da sala ao amigo. Continue jogando; ele alcança a missão atual '
+                'e entra nela. O jogo espera enquanto ele alcança; a entrada ocorre durante o jogo normal, depois de qualquer '
+                'pausa ou cena.\n'
+                'Amigo: cole o código e clique em «Entrar». Seu jogo alcança automaticamente a missão atual; aguarde sem '
+                'pressionar nada.\n'
+                'Para ver a abertura juntos, ambos escolham «Começar uma nova campanha juntos».',
+        'partnerWait': 'Aguardando seu parceiro… O jogo dele está alcançando a missão atual. A partida continua quando ele '
+                       'entrar durante o jogo normal.',
+        'partnerLinkedHost': 'Amigo conectado. Ele está alcançando a missão atual e entrará depois de uma pausa ou cena; o jogo '
+                             'aguarda enquanto isso.',
+        'partnerLinkedJoin': 'Conectado. Seu jogo alcança automaticamente a missão atual; você entrará depois de uma pausa ou '
+                             'cena. Aguarde sem pressionar nada.',
+        'partnerLeft': 'Seu amigo saiu. Você pode continuar; clique em «Hospedar» para convidá-lo de novo. Ele alcança e entra '
+                       'na missão atual.',
+        'comicHost': 'Criar partida',
+        'comicJoin': 'Entrar com amigo',
+        'comicSettings': 'Configurações',
+        'comicDetails': 'Detalhes',
+        'comicReady': 'Componente encontrado',
+        'comicSetup': 'Configuração necessária'},
+ 'it': {'title': 'Friend or Foe — cooperativa online',
+        'hint': 'Host: fai clic su «Ospita» e invia il codice lobby al tuo amico. Continua a giocare: raggiungerà la missione '
+                'attuale e si unirà. Il gioco aspetta che recuperi; l’ingresso avviene durante il gioco normale, dopo una pausa '
+                'o un filmato.\n'
+                'Amico: incolla il codice e fai clic su «Unisciti». Il gioco raggiunge automaticamente la missione attuale; '
+                'aspetta senza premere nulla.\n'
+                'Per vedere insieme l’inizio, scegliete entrambi «Inizia insieme una nuova campagna».',
+        'partnerWait': 'In attesa del tuo compagno… Il suo gioco sta raggiungendo la missione attuale. Si riprende quando si '
+                       'unisce durante il gioco normale.',
+        'partnerLinkedHost': 'Amico connesso. Sta raggiungendo la missione attuale e si unirà dopo una pausa o un filmato; il '
+                             'gioco aspetta nel frattempo.',
+        'partnerLinkedJoin': 'Connesso. Il gioco raggiunge automaticamente la missione attuale; ti unirai dopo una pausa o un '
+                             'filmato. Aspetta senza premere nulla.',
+        'partnerLeft': 'Il tuo amico è uscito. Puoi continuare; fai clic su «Ospita» per invitarlo di nuovo. Raggiungerà e si '
+                       'unirà alla missione attuale.',
+        'comicHost': 'Crea partita',
+        'comicJoin': 'Unisciti a un amico',
+        'comicSettings': 'Impostazioni',
+        'comicDetails': 'Dettagli',
+        'comicReady': 'Componente trovato',
+        'comicSetup': 'Configurazione richiesta'},
+ 'pl': {'title': 'Friend or Foe — kooperacja online',
+        'hint': 'Gospodarz: kliknij „Hostuj” i wyślij znajomemu kod lobby. Graj dalej: znajomy nadrobi postęp i dołączy do '
+                'bieżącej misji. Gra poczeka, aż nadrobi zaległości; dołączenie nastąpi podczas normalnej rozgrywki, po pauzie '
+                'lub przerywniku.\n'
+                'Znajomy: wklej kod i kliknij „Dołącz”. Gra automatycznie nadrobi postęp do bieżącej misji; poczekaj i niczego '
+                'nie naciskaj.\n'
+                'Aby wspólnie obejrzeć początek, obaj wybierzcie „Zacznijcie razem nową kampanię”.',
+        'partnerWait': 'Oczekiwanie na partnera… Jego gra nadrabia postęp bieżącej misji. Gra będzie kontynuowana, gdy dołączy '
+                       'podczas normalnej rozgrywki.',
+        'partnerLinkedHost': 'Znajomy połączony. Nadrabia postęp bieżącej misji i dołączy po pauzie lub przerywniku; gra w tym '
+                             'czasie zaczeka.',
+        'partnerLinkedJoin': 'Połączono. Gra automatycznie nadrobi postęp do bieżącej misji; dołączysz po pauzie lub '
+                             'przerywniku. Poczekaj i niczego nie naciskaj.',
+        'partnerLeft': 'Znajomy wyszedł. Możesz grać dalej; kliknij „Hostuj”, aby zaprosić go ponownie. Nadrobi postęp i dołączy '
+                       'do bieżącej misji.',
+        'comicHost': 'Utwórz grę',
+        'comicJoin': 'Dołącz do znajomego',
+        'comicSettings': 'Ustawienia',
+        'comicDetails': 'Szczegóły',
+        'comicReady': 'Znaleziono składnik',
+        'comicSetup': 'Wymagana konfiguracja'},
+ 'zh': {'title': 'Friend or Foe — 在线合作',
+        'hint': '主机：点击“创建”并把大厅代码发给朋友。继续游戏；朋友追上进度后会加入当前任务。追赶期间游戏会等待；朋友会在暂停或过场结束、恢复正常游戏后加入。\n'
+                '朋友：粘贴代码并点击“加入”。游戏会自动追上当前任务；请等待，不要按键。\n'
+                '若要一起观看开场，请双方都选择“一起开始新战役”。',
+        'partnerWait': '正在等待伙伴……对方的游戏正在追赶当前任务。对方在正常游戏中加入后，游戏会继续。',
+        'partnerLinkedHost': '朋友已连接，正在追赶当前任务。暂停或过场结束、恢复正常游戏后，朋友会加入；游戏会等待。',
+        'partnerLinkedJoin': '已连接。游戏会自动追赶当前任务；暂停或过场结束、恢复正常游戏后即可加入。请等待，不要按键。',
+        'partnerLeft': '朋友已离开。你可以继续游戏；再次点击“创建”邀请对方。对方追上进度后会加入当前任务。',
+        'comicHost': '创建游戏',
+        'comicJoin': '加入好友',
+        'comicSettings': '设置',
+        'comicDetails': '详情',
+        'comicReady': '已找到组件',
+        'comicSetup': '需要设置'}}
+for _code, _updates in COMIC_UPDATES.items():
+    T[_code].update(_updates)
+
+COMIC_GUIDE = {'en': 'Host: share your lobby code. Joining? Paste your friend’s code first. Host/Join uses Steam.', 'ru': 'Хост: отправьте код другу. Подключение: сначала вставьте код друга. Игра по сети использует Steam.', 'tr': 'Ev sahibi: lobi kodunu paylaş. Katılmak için önce arkadaşının kodunu yapıştır. Çevrimiçi oyun Steam kullanır.', 'uk': 'Хост: надішліть код другу. Для приєднання спочатку вставте код друга. Онлайн-гра використовує Steam.', 'de': 'Host: Lobbycode teilen. Zum Beitreten zuerst den Code deines Freundes einfügen. Online-Spiel nutzt Steam.', 'fr': 'Hôte : partagez le code. Pour rejoindre, collez d’abord le code de votre ami. Le jeu en ligne utilise Steam.', 'es': 'Anfitrión: comparte el código. Para unirte, pega primero el código de tu amigo. El modo en línea usa Steam.', 'pt': 'Anfitrião: compartilhe o código. Para entrar, cole primeiro o código do amigo. O modo online usa o Steam.', 'it': 'Host: condividi il codice. Per unirti, incolla prima il codice del tuo amico. Il gioco online usa Steam.', 'pl': 'Host: udostępnij kod lobby. Aby dołączyć, najpierw wklej kod znajomego. Gra online korzysta ze Steam.', 'zh': '主机：分享大厅代码。加入前，请先粘贴好友的代码。联机游戏使用 Steam。'}
+for _code, _guide in COMIC_GUIDE.items():
+    T[_code]["comicGuide"] = _guide
+
+# Reference-matched home-screen foreground labels.
+REFERENCE_TEXTS = {'en': ['Start a session', 'Play together', 'Game ready', 'Choose game folder', 'Change game folder', 'Help', 'Pick your side. Bring a friend.'], 'ru': ['Создайте сессию', 'Играйте вместе', 'Игра готова', 'Выбрать папку игры', 'Изменить папку игры', 'Помощь', 'Выберите сторону. Позовите друга.'], 'tr': ['Oturum başlat', 'Birlikte oyna', 'Oyun hazır', 'Oyun klasörünü seç', 'Oyun klasörünü değiştir', 'Yardım', 'Tarafını seç. Arkadaşını getir.'], 'uk': ['Створіть сесію', 'Грайте разом', 'Гра готова', 'Вибрати папку гри', 'Змінити папку гри', 'Допомога', 'Оберіть сторону. Покличте друга.'], 'de': ['Sitzung starten', 'Zusammen spielen', 'Spiel bereit', 'Spielordner wählen', 'Spielordner ändern', 'Hilfe', 'Wähle deine Seite. Bring Freunde mit.'], 'fr': ['Créer une session', 'Jouer ensemble', 'Jeu prêt', 'Choisir le dossier du jeu', 'Changer le dossier du jeu', 'Aide', 'Choisissez un camp. Invitez un ami.'], 'es': ['Inicia una sesión', 'Jugad juntos', 'Juego listo', 'Elegir carpeta del juego', 'Cambiar carpeta del juego', 'Ayuda', 'Elige tu bando. Trae un amigo.'], 'pt': ['Inicie uma sessão', 'Joguem juntos', 'Jogo pronto', 'Escolher pasta do jogo', 'Mudar pasta do jogo', 'Ajuda', 'Escolha seu lado. Traga um amigo.'], 'it': ['Avvia una sessione', 'Giocate insieme', 'Gioco pronto', 'Scegli cartella del gioco', 'Cambia cartella del gioco', 'Aiuto', 'Scegli da che parte stare. Porta un amico.'], 'pl': ['Rozpocznij sesję', 'Grajcie razem', 'Gra gotowa', 'Wybierz folder gry', 'Zmień folder gry', 'Pomoc', 'Wybierz stronę. Zaproś znajomego.'], 'zh': ['创建会话', '一起玩', '游戏已就绪', '选择游戏文件夹', '更改游戏文件夹', '帮助', '选择阵营，带上好友。']}
+for _code, _values in REFERENCE_TEXTS.items():
+    for _key, _value in zip(["comicHostSub", "comicJoinSub", "comicGameReady", "comicGameSetup", "comicChangeFolder", "comicHelp", "comicTagline"], _values):
+        T[_code][_key] = _value
+
+WPF_CARD_TEXTS = {'en': ['Done', 'Cancel'], 'ru': ['Готово', 'Отмена'], 'tr': ['Tamam', 'İptal'], 'uk': ['Готово', 'Скасувати'], 'de': ['Fertig', 'Abbrechen'], 'fr': ['Terminé', 'Annuler'], 'es': ['Listo', 'Cancelar'], 'pt': ['Concluído', 'Cancelar'], 'it': ['Fatto', 'Annulla'], 'pl': ['Gotowe', 'Anuluj'], 'zh': ['完成', '取消']}
+for _code, _values in WPF_CARD_TEXTS.items():
+    T[_code]["comicDone"], T[_code]["comicCancel"] = _values
+
+ACCESSIBILITY_LABELS = {'en': 'Accessibility mode', 'ru': 'Режим доступности', 'tr': 'Erişilebilirlik modu', 'uk': 'Режим доступності', 'de': 'Barrierefreier Modus', 'fr': 'Mode accessibilité', 'es': 'Modo de accesibilidad', 'pt': 'Modo de acessibilidade', 'it': 'Modalità accessibilità', 'pl': 'Tryb dostępności', 'zh': '无障碍模式'}
+for _code, _text in ACCESSIBILITY_LABELS.items():
+    T[_code]["comicAccessibility"] = _text
+
+
+# Session connection notification (not a claim that game catch-up has finished).
+FRIEND_JOINED = {
+    "en": "Your friend has joined the session.",
+    "ru": "Ваш друг присоединился к сессии.",
+    "tr": "Arkadaşın oturuma katıldı.",
+    "uk": "Ваш друг приєднався до сеансу.",
+    "de": "Dein Freund ist der Sitzung beigetreten.",
+    "fr": "Votre ami a rejoint la session.",
+    "es": "Tu amigo se ha unido a la sesión.",
+    "pt": "O seu amigo entrou na sessão.",
+    "it": "Il tuo amico si è unito alla sessione.",
+    "pl": "Twój znajomy dołączył do sesji.",
+    "zh": "你的好友已加入会话。",
+}
+for _code, _text in FRIEND_JOINED.items():
+    T[_code]["friendJoined"] = _text

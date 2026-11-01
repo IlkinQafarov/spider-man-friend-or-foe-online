@@ -2,3 +2,12 @@
 * text=auto
 compatibility/baseline.json -text
 steam/native/steam_appid.txt -text
+
+launcher/assets/backgrounds/*.png -text
+
+launcher/assets/foreground/*.png -text
+
+launcher/*.xaml text eol=lf
+
+# Preserve pinned third-party SVG, license and provenance bytes across platforms.
+launcher/assets/icons/* -text whitespace=cr-at-eol

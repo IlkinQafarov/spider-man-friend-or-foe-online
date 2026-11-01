@@ -1,6 +1,21 @@
 # Status and evidence
 
-Snapshot: **27 October 2026**. The player pre-release is [v1.1.0-beta](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases/tag/v1.1.0-beta), scenario 13 / wire protocol 6. Live joining is enabled by default for retail campaigns; research fixtures remain excluded from the player build. Both peers need the same release.
+Snapshot: **1 November 2026**. The player pre-release is [v1.1.0-beta](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases/tag/v1.1.0-beta), scenario 13 / wire protocol 6. Live joining is enabled by default for retail campaigns; research fixtures remain excluded from the player build. Both peers need the same release.
+
+## Source update: fixed-size WPF launcher and joiner menu
+
+The source now has a single-EXE bundler, the illustrated WPF layout fixed at 900x600 logical units, eleven UI languages and a reversible accessibility mode. Cross-drive Steam-library fallback discovery retains export/signature checks. A seven-second host-only notification reports validated session connection, without taking focus/input or claiming catch-up has finished. The published v1.1.0-beta asset predates these changes.
+
+Checks run on 1 November 2026:
+
+- Research/player compilation with warnings-as-errors; launcher own-code, translation, package (17 fixtures), bundle-builder and publication-audit fixtures passed.
+- Final bundle passed embedded framing/digests, allowlist, traversal and upgrade tests preserving synthetic settings/profile/import/session data. Its packaged player passed all eleven locales/five states, dialog/code/status/accessibility checks and native fixed-size/maximize refusal checks.
+- Native notification windows preserved foreground focus and had nonactivation/click-through styles in all eleven locales. Signal fixtures covered host-only delivery, duplicate suppression, reconnect and cancellation.
+- Steam discovery fixtures covered registered/fallback libraries across simulated volumes, missing volumes and deduplication. A real read-only non-system-drive scan found 11 compatible signed components. No account or DLL loading was used.
+- Corrected `joiner-menu-hide-005`: **PASS**, English/Russian preflights, 601 matching game frames, six common samples, game/launcher exits 0/0, no forced cleanup. Guest rows 0/1 were filtered, host hide count was zero, and both seats asserted the host-selected native New Game. Native indices and original rendering of Options/Quit stay intact; direct Options/Quit clicks were not separately tested.
+- `joiner-menu-hide-001/002`: **FAIL before game launch**, restricted-environment CreateProcess error 623. `003` passed 601 frames but hooked a base renderer that did not establish hiding. `004`: **FAIL**, temporary cursor relocation opened Options and stalled startup; it was normally closed with zero exits. The cursor change was removed and the actual derived-menu render path was used for `005`. These attempts earn no hiding pass credit.
+
+No new actual Steam/two-PC test, physical-controller test or full-campaign claim is made for this source update. Actual Windows DPI/mixed-monitor changes remain unverified. [Launcher documentation](LAUNCHER.md) explains build, independent art layers, extraction and runtime behavior.
 
 ## v1.1.0-beta: mid-mission joining
 

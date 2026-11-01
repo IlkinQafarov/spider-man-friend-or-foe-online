@@ -16,6 +16,10 @@ import subprocess
 
 ROOT = Path(__file__).absolute().parents[1]
 BASELINE = "5c85b8c90c60b6d615a1aa50ae95d7b0acd32bbbe24bc68c282c136e5e7af42b"
+GENERATED_ART = {'launcher/assets/backgrounds/header.png': 'a5cc36eb6260981ca9d81751ae1b4ac0152594118e45c2ac55bc81d28fc86bd3', 'launcher/assets/backgrounds/host.png': '0c66e3ce8419b1d1a00c9592605d48734f6a59f1bec544d736ae8c1e011e6f0b', 'launcher/assets/backgrounds/join.png': '8ad67becaf639116352cfd45f3775c78a78ef82c0ff0f578f86c613b613dee67'}
+GENERATED_ART["launcher/assets/foreground/title.png"] = "7e60cce03410bbc8d302d8c8e8fc895feb2bfe5665f18111bf839d7d5af9aa12"
+GENERATED_ART.update({'launcher/assets/foreground/host-icon.png': '008e22aad351e387f9a6d749dd7f9de559bba2867615fde4577f5e351e9ee3e5', 'launcher/assets/foreground/join-icon.png': '553931a85b918a069cd79395068c9ced4af2e91e87c00c0b81412301e6cc41c1'})
+THIRD_PARTY_ICONS = {'launcher/assets/icons/accessibility.svg': '114a9b6983ee20c43d76556bbb5633085a0e082b19464dfa36f1e27768c8f3ea', 'launcher/assets/icons/globe.svg': '82c6b8fa0b8e8d775ec9becd86f74a4e50bff7bee4c81f7362de45348504f14d', 'launcher/assets/icons/LICENSE-lucide.txt': 'b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57', 'launcher/assets/icons/person-standing.svg': '02960f63be14df8543ec5dabf5250a47509c35f177eb90ef9c864aa7acc1161a', 'launcher/assets/icons/settings.svg': '0ae27fd0f81999229e3127ac96c5b32edfea448e291d509e76212b917551d66b', 'launcher/assets/icons/SOURCES.json': '8ca4dacc3cb758081b00ad20f1bf566b611edba73bfb1ee34b3b3e37266e4e2e'}
 TOP = {".gitignore", ".gitattributes", "README.md", "PROTOTYPE.md", "LICENSE"}
 DIRECTORIES = {
     "probe": {".cpp", ".hpp", ".inc", ".cmd", ".md"},
@@ -28,7 +32,7 @@ DIRECTORIES = {
     "docs": {".md", ".svg"},
 }
 SPECIAL = {"compatibility/baseline.json", "steam/native/steam_appid.txt",
-           "analysis/native/score_pair.py", "qa/README.md"}
+           "analysis/native/score_pair.py", "qa/README.md", "launcher/LauncherWindow.xaml"}
 RULES = {
     "user profile path": re.compile(r"(?i)\b[A-Z]:[\\/]+Users[\\/]+[^\\/\s\"'<>%]+"),
     "credential": re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|sk-[A-Za-z0-9_-]{30,})\b"),
@@ -46,7 +50,7 @@ def allowed(name):
     path = Path(name)
     if "\\" in name or path.is_absolute() or any(p in ("", ".", "..") for p in name.split("/")):
         return False
-    return name in TOP or name in SPECIAL or (
+    return name in THIRD_PARTY_ICONS or name in GENERATED_ART or name in TOP or name in SPECIAL or (
         path.parent.as_posix() in DIRECTORIES and path.suffix in DIRECTORIES[path.parent.as_posix()])
 
 
@@ -56,11 +60,19 @@ def plain(path):
         if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
             raise Rejected("Reparse path rejected")
     info = path.stat()
-    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or not 0 < info.st_size <= 524288:
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or not 0 < info.st_size <= (5242880 if path.name in ("header.png", "host.png", "join.png", "title.png", "host-icon.png", "join-icon.png") else 524288):
         raise Rejected("Nonregular, linked, empty or oversized source file")
 
 
 def inspect_text(name, raw):
+    if name in THIRD_PARTY_ICONS:
+        if hashlib.sha256(raw).hexdigest()!=THIRD_PARTY_ICONS[name]:
+            raise Rejected("Pinned Lucide source changed")
+        return
+    if name in GENERATED_ART:
+        if not raw.startswith(b"\x89PNG\r\n\x1a\n") or hashlib.sha256(raw).hexdigest() != GENERATED_ART[name]:
+            raise Rejected("Generated artwork pin mismatch: " + name)
+        return
     if b"\0" in raw:
         raise Rejected(name + ": binary content")
     text = raw.decode("utf-8")
@@ -116,7 +128,8 @@ def snapshot(name):
         inventory.append({"path": source, "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()})
     report = {"schema": "fof-source-publication-v1", "created_utc": datetime.now(timezone.utc).isoformat(),
         "files": inventory, "count": len(inventory), "bytes": sum(f["bytes"] for f in inventory),
-        "history_included": False, "binaries_included": False, "game_assets_included": False}
+        "history_included": False, "binaries_included": False, "game_assets_included": False,
+              "generated_launcher_art_included": sorted(n for n in names if n in GENERATED_ART)}
     with (dest / "inventory.json").open("x", encoding="utf-8") as stream:
         json.dump(report, stream, indent=2)
     print(json.dumps({"snapshot": name, "count": report["count"], "bytes": report["bytes"],

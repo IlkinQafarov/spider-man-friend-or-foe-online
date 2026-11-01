@@ -23,6 +23,12 @@ BASELINE_SHA = "5c85b8c90c60b6d615a1aa50ae95d7b0acd32bbbe24bc68c282c136e5e7af42b
 STEAM_SHA = "670d654aa3255c5061cf0236a1cdbb2f5076cbd5ae44f613b6f4921558e83e2d"
 # No recursive copy. Adding a shipped file requires editing this allowlist.
 PAYLOAD = {
+    "launcher/assets/foreground/host-icon.png": None,
+    "launcher/assets/foreground/join-icon.png": None,
+    "launcher/assets/foreground/title.png": None,
+    "launcher/assets/backgrounds/header.png": None,
+    "launcher/assets/backgrounds/host.png": None,
+    "launcher/assets/backgrounds/join.png": None,
     "launcher/fof-private-launcher.exe": (0x8664, False),
     "probe/native-launcher.exe": (0x14C, False),
     "probe/native-probe.dll": (0x14C, True),
@@ -46,10 +52,10 @@ README = """# Spider-Man: Friend or Foe — private research prototype
 
 This package is unfinished and is not a release.
 
-How to play: the host clicks the big red HOST button. The game opens and a lobby
+How to play: the host clicks the big red Host a game panel. The game opens and a lobby
 code appears in the launcher; the host sends it to the friend and plays (New Game
 or Continue; saves are kept in the package's profile folder). The friend pastes
-the code ("Paste code") and clicks the big blue JOIN button. Their game catches
+the code ("Paste code") and clicks the big blue Join a friend panel. Their game catches
 up with the host's current mission, then joins that mission. The host waits
 briefly while the friend catches up. Joining happens at the next normal gameplay
 point, after any pause or cutscene; the area does not restart. Each player uses
@@ -75,6 +81,17 @@ screen as in the hub). Its first entry, saving the game, only works once a game
 is loaded. The game runs at 60 frames per second, alone and in co-op.
 
 First launch: music starts at 50%, speech and effects at 80%.
+
+Comic WPF launcher: Host and Join are the two large action panels. Join asks for
+your friend's lobby code in a separate card. The gear opens game language,
+display and Steam component settings, plus the activity log. An active session
+shows a full-width session panel with a large selectable lobby code and Copy/Stop
+controls. Escape closes a card. The bottom-right accessibility toggle switches
+to readable fonts, grey boards and straight labels; press again to restore comic
+view. Globe/settings/accessibility icons are Lucide; their ISC/MIT notices are
+embedded in the launcher as fof.icons.license.
+The three background pictures live separately in launcher/assets/backgrounds/
+(header.png, host.png, join.png); labels, icons and controls are drawn on top.
 
 Controls and settings: keyboard players (no controller plugged in) start with the
 game's Laptop controls layout. You can change it in Options; the game's own
@@ -279,6 +296,9 @@ def collect(root: Path, baseline_sha: str = BASELINE_SHA, player: bool = False) 
         elif relative.endswith("steam_appid.txt"):
             if data.strip() != b"480":
                 raise Rejected("Steam application metadata must contain 480")
+        elif relative.endswith(".png"):
+            if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+                raise Rejected("Background must be a PNG: " + relative)
         elif digest(data) != baseline_sha:
             raise Rejected("Compatibility baseline pin mismatch")
         result[relative] = data
@@ -353,7 +373,7 @@ def selftest() -> None:
                 struct.pack_into("<H", data, 86, 0x2000 if pe[1] else 0)
                 path.write_bytes(data)
             else:
-                path.write_bytes(b"480\r\n" if relative.endswith(".txt") else baseline)
+                path.write_bytes(b"\x89PNG\r\n\x1a\nfixture" if relative.endswith(".png") else (b"480\r\n" if relative.endswith(".txt") else baseline))
         (root / "never-copy-game-or-account-log.txt").write_text("private fixture")
         result = build(root, "fixture-package", digest(baseline))
         assert result["files"] == len(PAYLOAD) + 3

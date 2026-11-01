@@ -184,3 +184,18 @@ Opening the UI and offline tests do not use an account. Host/Join and explicit `
 Further account use, invitations or remote-PC tests need their own authorization and bounded evidence. Existing reports do not authorize automated account actions. Do not infer broad WAN readiness from mock transport, ABI fixtures, lobby smoke or one successful mission.
 
 Keep local logs, captures, save data, account IDs and absolute personal paths out of commits. Publish sanitized commands and summaries with the exact build, test scope and failure criteria.
+
+
+## Fixed launcher and waiting joiner menu (1 November 2026)
+
+```powershell
+launcher/fof-private-launcher.exe --selftest
+launcher/fof-private-launcher.exe --wpf-selftest
+python -I launcher/ui_texts_build.py --check
+python -I launcher/build_package.py --selftest
+python -I launcher/build_bundle.py --selftest
+```
+
+The WPF test includes eleven translations, five synthetic session states, a full 20-digit code, readable mode, keyboard/modal checks, actual fixed native window limits and a nonactivating host-notice window. Synthetic relay events cover host-only/deduplicated/reconnect/cancel behavior; no account is used. Final bundle `--selftest` checks its actual embedded bytes and synthetic upgrade data preservation. Run the packaged player's WPF suite too.
+
+Use the existing real-client harness in retail `--campaign` mode with a fresh `--name`, `--frames 600 --seconds 900`, and isolated supported English/Russian copies. Exercise the joiner waiting at the main menu for the host’s choice. Inspect guest row-0/row-1 hide markers and absence of host hide markers, native New Game assertions, matching state samples and normal exits. The corrected `joiner-menu-hide-005` passed 601 common frames. Preserve failed attempts and do not treat static unchanged Options/Quit paths as an interactive click test. See [STATUS.md](STATUS.md) for failure details and bounded scope.

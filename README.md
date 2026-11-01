@@ -14,6 +14,12 @@ English/Russian automated checks passed first arrival under simulated bad intern
 
 Catch-up is not an instant snapshot: longer histories take longer to reconstruct. Up to one hour of simulation history is retained per mission. An unverifiable or unavailable history refuses the join while preserving the host's game; it never falls back to restarting the area. Both players must use the same release. See [verified results and limits](docs/STATUS.md), [test procedures](docs/TESTING.md#live-mission-admission), and [remaining work](docs/ROADMAP.md).
 
+## Latest source update (1 November 2026)
+
+The source now includes an illustrated WPF launcher with a fixed 900x600 window, reversible accessibility mode and a single-EXE bundler. Steam component discovery checks libraries across local drives. The joiner's New Game/Load rows are hidden while waiting for the host, and a host-only friend-joined notification supports all eleven launcher languages.
+
+The packaged UI and extraction/upgrade checks passed. A focused English/Russian game regression passed 601 matching frames and normal exits after the host's automatic New Game choice. These changes are in source; **the v1.1.0-beta release download has not been replaced**. See [launcher build/behavior](docs/LAUNCHER.md) and [current evidence](docs/STATUS.md).
+
 ## Current state (2026-10-27, v1.1.0-beta)
 
 The campaign route runs end to end in automated tests: New Game or Continue on the host, the Helicarrier hub, the mission computer, missions and the return to the hub. A test runner that shortens each mission to its ending played **the whole campaign, all 20 missions, in one co-op run** (60,000 frames, Tokyo 1 to the final Venom fight), with all seven bosses (Doc Ock, Green Goblin, Sandman, Scorpion, Rhino, Mysterio, Venom); level exits, boss intro cutscenes, results screens and the recorded progress were identical on both games after every mission. Most regions were also checked over a simulated bad connection (240 ms round trip, jitter, a 600 ms freeze every 10 s). Two crashes that are in the game's own code are repaired at start-up by the add-on, only when the exact broken bytes are present: Mysterio's laser (its code was overwritten by an old no-CD loader stub in this Game.exe build) and an empty draw-list entry in Transylvania 3.

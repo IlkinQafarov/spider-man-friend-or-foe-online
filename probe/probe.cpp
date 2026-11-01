@@ -2442,6 +2442,36 @@ static void campaignTogetherDecide(DWORD row){
     else log("CAMPAIGN AUTO_TOGETHER host chose Continue; partner joins at the hub");
 }
 static DWORD campaignMainRow(){DWORD main=sceneObject(2),list=main?readWord(main+0x84):0;return list?readWord(list+0x8d08):~0u;}
+// Main-menu render 49A431 enters the generic list renderer 4AD4D2, whose per-row
+// draw call is 4AD5B2 -> 4AD61D. Keep the native list and row indices intact;
+// the bridge suppresses only rows 0/1 while a co-op joiner waits at its menu.
+static bool campaignJoinerMainMenuRestricted(){return campaignMode&&networkRole==2&&(campaignJoinPending||campaignAutoTogether);}
+static bool __cdecl campaignHideJoinerMainMenuRow(DWORD list,DWORD row){
+    if(row>=2||!campaignJoinerMainMenuRestricted())return false;
+    DWORD main=sceneObject(2);if(!main||readWord(main+0x84)!=list)return false;
+    DWORD count=readWord(list+0x8d04);if(count!=4){static bool warned=false;if(!warned){warned=true;log("CAMPAIGN JOINER_MAIN_MENU_HIDE skipped unexpected row count=%lu",count);}return false;}
+    static DWORD reported=0;if(!(reported&(1u<<row))){reported|=1u<<row;log("CAMPAIGN JOINER_MAIN_MENU_HIDE row=%lu count=4 visible_rows=2,3 list=%08lx",row,list);}
+    return true;
+}
+static void __declspec(naked) campaignMainMenuRowRender(){
+    __asm {
+        pushad
+        push eax
+        push ecx
+        call campaignHideJoinerMainMenuRow
+        add esp,8
+        test al,al
+        popad
+        jz render_row
+        // 4AD61D owns the row's retained render object: with a null first
+        // argument it clears any prior object, stores null, and skips drawing.
+        mov dword ptr [esp+4],0
+    render_row:
+        // Tail-enter the verified native callee so its RET 14h and row cleanup run.
+        push 04ad61dh
+        ret
+    }
+}
 static bool __cdecl campaignMainAccept(DWORD* winner){
     if(campaignStopping())return false;
     bool accepted=((bool(__cdecl*)(DWORD*))0x497e78)(winner);
@@ -3200,7 +3230,8 @@ static bool installCampaign(){
     if(readWord(0x57e6d8+0x18)!=0x51a6cc||readWord(0x57e6d8+0x1c)!=0x4337ec){log("FAIL CAMPAIGN native save task callback guard");return false;}
     for(const auto& entry:entries){void** table=(void**)entry.table;if(table[19]!=(void*)entry.callback||!patchComSlot(table,19,entry.hook,(void**)entry.original)){log("FAIL CAMPAIGN native update vtable guard table=%08lx",entry.table);return false;}}
     void** mission=(void**)0x56d120;if(mission[14]!=(void*)0x49f107||!patchComSlot(mission,14,(void*)campaignMissionDeactivate,(void**)&originalCampaignDeactivate))return false;
-    return patchVerifiedCall(0x49a4e8,0x497e78,(void*)campaignMainAccept)&&
+    return patchVerifiedCall(0x4ad5b2,0x4ad61d,(void*)campaignMainMenuRowRender)&&
+        patchVerifiedCall(0x49a4e8,0x497e78,(void*)campaignMainAccept)&&
         patchVerifiedCall(0x4a522f,0x49a5cd,(void*)campaignSlotPromptBridge)&&
         patchVerifiedCall(0x4a554d,0x49a5cd,(void*)campaignAutosaveConfigureBridge)&&patchVerifiedCall(0x49a76a,0x497e78,(void*)campaignAutosaveAccept)&&
         patchVerifiedCall(0x4a523f,0x4a582a,(void*)campaignProfileInitBridge)&&patchVerifiedCall(0x4a546b,0x4a582a,(void*)campaignProfileInitBridge)&&
