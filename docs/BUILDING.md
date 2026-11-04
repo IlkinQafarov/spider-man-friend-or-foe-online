@@ -1,6 +1,6 @@
 # Building the research source
 
-These are developer build instructions for one pinned Windows executable. For packaged player builds, use the Releases link in the repository README. No compiler, Steam library or game is downloaded by the build scripts.
+These are developer build instructions for the pinned Windows PC builds. For packaged player builds, use the Releases link in the repository README. No compiler, Steam library or game is downloaded by the build scripts.
 
 ## Prerequisites
 
@@ -32,13 +32,9 @@ The native ABI selftest pins the exact own-code mock DLL hash. A fresh mock buil
 
 ## Game content is separate
 
-The supported x86 `Game.exe` is version 1.0.0.111 with SHA-256:
+Both supported `Game.exe` hashes are listed under Compatibility in the project README. The DVD loader runs from the private game import and reaches the original CRT entry before the co-op hooks are installed. The game code and imports are validated against build-specific signatures.
 
-```text
-ebd30047d7e58c95bf7dc4bd1fb4a5780e16aa472b61c25a8c421632662083db
-```
-
-The engine's exact identity is unverified. Addresses and hooks are specific to this executable, and another build must be investigated independently.
+The optional runtime for the English DVD is the x86 `version.dll` built from [SafeDiscLoader2 commit 91b6b89](https://github.com/nckstwrt/SafeDiscLoader2/tree/91b6b89da8296276c36ff1a8fea2456c892ca865). The package includes the exact pinned library, the corresponding unmodified source archive, and its GPLv3 license under `probe/`. The reference build used MSBuild on `version-proxy.vcxproj` with `Configuration=Release`, `Platform=Win32`, and `PlatformToolset=v145`. The source archive is produced by `git archive --format=zip --prefix=SafeDiscLoader2/ 91b6b89da8296276c36ff1a8fea2456c892ca865`. For the identical shipped build, use the three verified files from the stock-DVD player's extracted `probe` directory.
 
 Use your own game files. The launcher can import a verified complete English or Russian pack into a **new** `test/english/` or `test/russian/` destination; it refuses to replace an existing destination or write the source folder. The content manifest contains hashes and relative names, not game bytes. Reparse points, unknown runtime files and incoherent language mixtures are rejected. Verify the copy before any game gate; see [Testing](TESTING.md).
 
@@ -50,7 +46,7 @@ Opening the GUI or verifying files does not start account transport. Clicking Ho
 python -I launcher/build_package.py --selftest
 ```
 
-The builder has an explicit `--build <new-package-name>` mode. It copies only allowlisted own runtime outputs, the content manifest and instructions; existing output names are refused. Do not turn a successful package build into a playable-release claim. Player builds are published separately; creating a local package does not update or publish a GitHub release.
+The builder has an explicit `--build <new-package-name>` mode. It copies allowlisted runtime outputs, the DVD compatibility library and its source and license, the content manifest, and instructions; existing output names are refused. Do not turn a successful package build into a playable-release claim. Player builds are published separately; creating a local package does not update or publish a GitHub release.
 
 Continue with [Testing](TESTING.md) before attempting a game run.
 

@@ -1,6 +1,14 @@
 # Status and evidence
 
-Snapshot: **1 November 2026**. The player pre-release is [v1.2.0-beta](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases/tag/v1.2.0-beta), scenario 13 / wire protocol 6. Live joining is enabled by default for retail campaigns; research fixtures remain excluded from the player build. Both peers need the same release.
+Snapshot: **4 November 2026**. The player pre-release is [v1.3.0-beta](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases/tag/v1.3.0-beta), scenario 13 / wire protocol 6. Live joining is enabled by default for retail campaigns; research fixtures remain excluded from the player build. Both peers need the same release.
+
+## v1.3.0-beta: rooftop, comic-paper menus, cancellable verification and DVD support
+
+The final extracted player passed core checks, all eleven UI languages, five session states, normal/readable dialog fit, keyboard/join validation, long status scrolling and 20-digit lobby fit. Actual 900x600 renders of the revised dialogs were inspected. Host cancellation/retry and start-together cancellation completed in 23/3/1 ms on the test machine without starting a native game or relay. Actual bundle extraction and embedded runtime checks passed.
+
+Original English DVD paired runs passed 608 matching gameplay frames, and original-DVD-to-Russian passed 606, with clean exits. The packaged production DLL also negotiated its native peer handshake on both DVD game processes with bot/fixture flags off. These are isolated tests on one PC, not new two-PC Steam or physical-controller certification. The earlier mixed-build idle attempt timed out in its opening movie; the passing campaign run skipped supported movies on both seats.
+
+There is no test frame limit in ordinary player launch. The player DLL rejects bot/scripted-fixture requests before attaching gameplay hooks, and the GUI clears inherited probe options before constructing its player environment. Development QA scripts remain source-only. Existing co-op barriers and catch-up verification are necessary for synchronized play and remain enabled.
 
 ## v1.2.0-beta: fixed-size WPF launcher and joiner menu
 

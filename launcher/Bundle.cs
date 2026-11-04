@@ -15,14 +15,14 @@ internal static class Bundle
     private sealed class Item { public string Path; public long Size; public string Hash; public byte[] Data; }
     private static readonly string[] Core = new string[] {
         "launcher/fof-private-launcher.exe", "probe/native-launcher.exe",
-        "probe/native-probe.dll", "probe/d3d9.dll", "steam/native/native-relay.exe",
+        "probe/native-probe.dll", "probe/d3d9.dll", "probe/version.dll",
+        "probe/safedisc-source.zip", "probe/SAFE-DISC-LICENSE.txt", "steam/native/native-relay.exe",
         "steam/native/steam_appid.txt", "compatibility/baseline.json"
     };
-    private static readonly string[] Backgrounds = new string[] {
-        "launcher/assets/backgrounds/header.png", "launcher/assets/backgrounds/host.png", "launcher/assets/backgrounds/join.png"
+    private static readonly string[] Rooftop = new string[] {
+        "launcher/assets/rooftop/distant-city.png", "launcher/assets/rooftop/swing-sign.png", "launcher/assets/rooftop/front.png",
+        "launcher/assets/rooftop/live-plates.png"
     };
-    private const string Foreground = "launcher/assets/foreground/title.png";
-    private static readonly string[] Icons={"launcher/assets/foreground/host-icon.png", "launcher/assets/foreground/join-icon.png"};
     private const string Magic = "FOFBNDL1";
 
     [STAThread]
@@ -69,7 +69,7 @@ internal static class Bundle
             using (BinaryReader r = new BinaryReader(s, Encoding.UTF8)) {
                 if (Encoding.ASCII.GetString(r.ReadBytes(8)) != Magic) throw new InvalidDataException("Invalid embedded package.");
                 int count = r.ReadInt32();
-                if (count < Core.Length || count > Core.Length + Backgrounds.Length + 1 + Icons.Length) throw new InvalidDataException("Invalid embedded file count.");
+                if (count != Core.Length + Rooftop.Length) throw new InvalidDataException("Invalid embedded file count.");
                 List<Item> items = new List<Item>(); HashSet<string> names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 for (int i = 0; i < count; i++) {
                     string path = r.ReadString(); long size = r.ReadInt64(); string hash = r.ReadString();
@@ -90,9 +90,7 @@ internal static class Bundle
     private static bool Allowed(string path)
     {
         foreach (string p in Core) if (String.Equals(p, path, StringComparison.Ordinal)) return true;
-        foreach (string p in Backgrounds) if (String.Equals(p, path, StringComparison.Ordinal)) return true;
-        if (String.Equals(Foreground, path, StringComparison.Ordinal)) return true;
-        foreach(string icon in Icons)if(String.Equals(icon,path,StringComparison.Ordinal))return true;
+        foreach (string p in Rooftop) if (String.Equals(p, path, StringComparison.Ordinal)) return true;
         return false;
     }
 
@@ -168,11 +166,13 @@ internal static class Bundle
     private static int SelfTest()
     {
         List<Item> embedded = ReadEmbedded();
-        if (!Allowed(Core[0]) || !Allowed(Backgrounds[2]) || Allowed("profiles/settings.json") || Allowed("assets/backgrounds/other.png"))
+        if (!Allowed(Core[0]) || !Allowed(Rooftop[2]) || Allowed("profiles/settings.json") || Allowed("assets/rooftop/other.png"))
             throw new Exception("Allowlist fixture failed");
-        Item foreground = embedded.Find(delegate(Item x) { return x.Path == Foreground; });
-        if (foreground != null && !String.Equals(HashBytes(foreground.Data), foreground.Hash, StringComparison.OrdinalIgnoreCase))
-            throw new Exception("Foreground resource hash fixture failed");
+        foreach (string rooftop in Rooftop) {
+            Item layer = embedded.Find(delegate(Item x) { return x.Path == rooftop; });
+            if (layer == null || !String.Equals(HashBytes(layer.Data), layer.Hash, StringComparison.OrdinalIgnoreCase))
+                throw new Exception("Rooftop layer resource hash fixture failed: " + rooftop);
+        }
         string temp = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "own-bundle-selftest-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(temp);
         try {

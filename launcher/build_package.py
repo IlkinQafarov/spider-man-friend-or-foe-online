@@ -21,18 +21,22 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE_SHA = "5c85b8c90c60b6d615a1aa50ae95d7b0acd32bbbe24bc68c282c136e5e7af42b"
 STEAM_SHA = "670d654aa3255c5061cf0236a1cdbb2f5076cbd5ae44f613b6f4921558e83e2d"
+SAFEDISC_DLL_SHA = "3b4ba415415e93ec01994093388132153fe270692fe7f6cabbbaba49fd047f75"
+SAFEDISC_SOURCE_SHA = "60cab1eddd2dca99791e3c346e832c13234adfe0c68018307ffb610d6208e165"
+SAFEDISC_LICENSE_SHA = "81cbae84a29ce7e770bf2bc7b178e50bda0ce8de6067aba661b0bc7b05b562f8"
 # No recursive copy. Adding a shipped file requires editing this allowlist.
 PAYLOAD = {
-    "launcher/assets/foreground/host-icon.png": None,
-    "launcher/assets/foreground/join-icon.png": None,
-    "launcher/assets/foreground/title.png": None,
-    "launcher/assets/backgrounds/header.png": None,
-    "launcher/assets/backgrounds/host.png": None,
-    "launcher/assets/backgrounds/join.png": None,
+    "launcher/assets/rooftop/distant-city.png": None,
+    "launcher/assets/rooftop/swing-sign.png": None,
+    "launcher/assets/rooftop/front.png": None,
+    "launcher/assets/rooftop/live-plates.png": None,
     "launcher/fof-private-launcher.exe": (0x8664, False),
     "probe/native-launcher.exe": (0x14C, False),
     "probe/native-probe.dll": (0x14C, True),
     "probe/d3d9.dll": (0x14C, True),
+    "probe/version.dll": (0x14C, True),
+    "probe/safedisc-source.zip": None,
+    "probe/SAFE-DISC-LICENSE.txt": None,
     "steam/native/native-relay.exe": (0x8664, False),
     "steam/native/steam_appid.txt": None,
     "compatibility/baseline.json": None,
@@ -82,16 +86,11 @@ is loaded. The game runs at 60 frames per second, alone and in co-op.
 
 First launch: music starts at 50%, speech and effects at 80%.
 
-Comic WPF launcher: Host and Join are the two large action panels. Join asks for
-your friend's lobby code in a separate card. The gear opens game language,
-display and Steam component settings, plus the activity log. An active session
-shows a full-width session panel with a large selectable lobby code and Copy/Stop
-controls. Escape closes a card. The bottom-right accessibility toggle switches
-to readable fonts, grey boards and straight labels; press again to restore comic
-view. Globe/settings/accessibility icons are Lucide; their ISC/MIT notices are
-embedded in the launcher as fof.icons.license.
-The three background pictures live separately in launcher/assets/backgrounds/
-(header.png, host.png, join.png); labels, icons and controls are drawn on top.
+Rooftop WPF launcher: the animated scene is included in launcher/assets/rooftop/
+as distant-city.png, swing-sign.png, front.png, plus the transparent live-plates.png
+atlas used for dynamic localized labels and session status. Host/Join and settings
+remain live accessible controls above the scene; Escape closes a card. The
+accessibility toggle provides readable live text and keyboard focus.
 
 Controls and settings: keyboard players (no controller plugged in) start with the
 game's Laptop controls layout. You can change it in Options; the game's own
@@ -133,11 +132,10 @@ shared Continue/save recovery on both PCs still need validation.
 
 1. Extract the complete package into a new writable local folder. Keep its
    launcher/, probe/, steam/native/, and compatibility/ subfolders together.
-2. Open Start.cmd. Pick the window's language at the top ("Launcher language":
+2. Open Start.cmd. Pick the window's language on the rooftop ("Launcher language":
    English, Russian, Turkish, Ukrainian, German, French, Spanish, Portuguese,
    Italian, Polish or Chinese); it starts in your Windows language and is
-   remembered. The game's own language (English or Russian files) is chosen
-   separately under "Game language". Windows x64 and the existing .NET Framework are required;
+   remembered. The launcher detects English or Russian from the installed game files. Windows x64 and the existing .NET Framework are required;
    Python is not needed to run this package.
 3. The launcher looks for your installed game on all drives when it starts and
    offers the copy it finds (only read, never changed). Otherwise click
@@ -214,8 +212,9 @@ does not prove game delivery.
 
 SHA256SUMS.json lists every other shipped file, with its byte size and SHA-256.
 It detects accidental changes and is not a signature or an independent trust
-source. This package includes only this project's own runtime components and
-file-hash metadata. It contains no SDK implementation, game data, test fixtures,
+source. For an original English DVD, select the Activision installation in Game & Steam.
+The launcher uses its stock Game.exe with the included SafeDiscLoader2 compatibility
+library. The corresponding source and GPLv3 license are in the probe directory. It contains no SDK implementation, game data, test fixtures,
 saved games, raw account output, or original install files.
 """.replace("STEAM_SHA_VALUE", STEAM_SHA)
 
@@ -291,6 +290,8 @@ def collect(root: Path, baseline_sha: str = BASELINE_SHA, player: bool = False) 
             raise Rejected("Embedded private user path in package input: " + relative)
         if relative in PLAYER_MARKERS and (PLAYER_MARKERS[relative] in data) != player:
             raise Rejected("Wrong edition binary for this package: " + relative)
+        if relative == "probe/version.dll" and digest(data) != SAFEDISC_DLL_SHA:
+            raise Rejected("SafeDisc compatibility DLL pin mismatch")
         if pe is not None:
             validate_pe(data, pe)
         elif relative.endswith("steam_appid.txt"):
@@ -299,6 +300,13 @@ def collect(root: Path, baseline_sha: str = BASELINE_SHA, player: bool = False) 
         elif relative.endswith(".png"):
             if not data.startswith(b"\x89PNG\r\n\x1a\n"):
                 raise Rejected("Background must be a PNG: " + relative)
+        elif relative == "probe/safedisc-source.zip":
+            if not data.startswith(b"PK\x03\x04") or digest(data) != SAFEDISC_SOURCE_SHA:
+                raise Rejected("SafeDisc source archive pin mismatch")
+        elif relative == "probe/SAFE-DISC-LICENSE.txt":
+            if (b"GNU GENERAL PUBLIC LICENSE" not in data or b"Version 3" not in data
+                    or digest(data) != SAFEDISC_LICENSE_SHA):
+                raise Rejected("SafeDisc GPLv3 license pin mismatch")
         elif digest(data) != baseline_sha:
             raise Rejected("Compatibility baseline pin mismatch")
         result[relative] = data
@@ -373,7 +381,17 @@ def selftest() -> None:
                 struct.pack_into("<H", data, 86, 0x2000 if pe[1] else 0)
                 path.write_bytes(data)
             else:
-                path.write_bytes(b"\x89PNG\r\n\x1a\nfixture" if relative.endswith(".png") else (b"480\r\n" if relative.endswith(".txt") else baseline))
+                fixture = (b"\x89PNG\r\n\x1a\nfixture" if relative.endswith(".png") else
+                           b"480\r\n" if relative.endswith("steam_appid.txt") else
+                           b"PK\x03\x04fixture" if relative.endswith(".zip") else
+                           b"GNU GENERAL PUBLIC LICENSE\nVersion 3" if relative.endswith("LICENSE.txt") else baseline)
+                path.write_bytes(fixture)
+        # Pin constants are exercised against synthetic fixture bytes here;
+        # production collection retains the immutable real artifact pins above.
+        global SAFEDISC_DLL_SHA, SAFEDISC_SOURCE_SHA, SAFEDISC_LICENSE_SHA
+        SAFEDISC_DLL_SHA = digest((root / "probe/version.dll").read_bytes())
+        SAFEDISC_SOURCE_SHA = digest((root / "probe/safedisc-source.zip").read_bytes())
+        SAFEDISC_LICENSE_SHA = digest((root / "probe/SAFE-DISC-LICENSE.txt").read_bytes())
         (root / "never-copy-game-or-account-log.txt").write_text("private fixture")
         result = build(root, "fixture-package", digest(baseline))
         assert result["files"] == len(PAYLOAD) + 3
@@ -399,6 +417,11 @@ def selftest() -> None:
         binary.write_bytes(original)
         reject(lambda: validate_pe(original, (0x8664, False)))
         reject(lambda: validate_pe(original, (0x14C, True)))
+        dll = root / "probe/version.dll"
+        original_dll = dll.read_bytes()
+        dll.write_bytes(original_dll + b"tampered")
+        reject(lambda: collect(root, digest(baseline)))
+        dll.write_bytes(original_dll)
         real_lstat = Path.lstat
         def fake_reparse(path, *args, **kwargs):
             if path == root.parent:

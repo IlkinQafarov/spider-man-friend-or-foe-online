@@ -89,6 +89,35 @@ class ManifestTests(unittest.TestCase):
         self.put(self.core | self.en | {"unins000.dat": b"metadata", "GameLog/ExecutionPath": b"log"})
         self.assertEqual(self.verify()["status"], "pass")
 
+    def test_staged_safedisc_dll_requires_ownership_and_english(self):
+        self.put(self.core | self.en | {"version.dll": b"staged"})
+        owned = lambda name, found: name == "version.dll"
+        with self.assertRaisesRegex(p.Rejected, "stock English DVD"):
+            p.verify_records(self.baseline, p.scan(self.root), own_proxy=owned)
+        with self.assertRaisesRegex(p.Rejected, "Unknown DLL"):
+            p.verify_records(self.baseline, p.scan(self.root), own_proxy=lambda n, f: False)
+        self.put(self.ru)
+        with self.assertRaisesRegex(p.Rejected, "stock English DVD"):
+            p.verify_records(self.baseline, p.scan(self.root), own_proxy=owned)
+
+    def test_pinned_dvd_executable_is_english_only_and_keeps_wire_digest(self):
+        self.put(self.core | self.en)
+        baseline_digest = p.digest(self.baseline["critical"], "critical")
+        def dvd_hash(path):
+            return [3790912, p.DVD_GAME_SHA256] if Path(path).name.lower() == "game.exe" else record(Path(path).read_bytes())
+        result = p.verify_records(self.baseline, p.scan(self.root), hasher=dvd_hash)
+        self.assertEqual(result["language"], "English")
+        self.assertEqual(result["critical_digest"], baseline_digest)
+        self.put(self.ru)
+        with self.assertRaisesRegex(p.Rejected, "DVD executable requires English"):
+            p.verify_records(self.baseline, p.scan(self.root), hasher=dvd_hash)
+
+    def test_altered_staged_safedisc_dll_rejected(self):
+        self.put(self.core | self.en | {"version.dll": b"modified"})
+        self.assertFalse(p.own_proxy_file("version.dll", p.scan(self.root)))
+        with self.assertRaisesRegex(p.Rejected, "Unknown DLL"):
+            self.verify()
+
     def test_outside_test_root_rejected(self):
         test_root = self.root / "test"
         test_root.mkdir()

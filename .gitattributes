@@ -11,3 +11,7 @@ launcher/*.xaml text eol=lf
 
 # Preserve pinned third-party SVG, license and provenance bytes across platforms.
 launcher/assets/icons/* -text whitespace=cr-at-eol
+
+launcher/assets/rooftop/*.png -text
+launcher/assets/comic-paper/*.png -text
+launcher/assets/sounds/*.wav -text

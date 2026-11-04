@@ -3157,24 +3157,24 @@ static bool patchVerifiedCall(DWORD address,DWORD expected,void* replacement){
     BYTE* at=(BYTE*)address;if(at[0]!=0xe8||(DWORD)(address+5+*(LONG*)(at+1))!=expected){log("FAIL AUTOTEST call signature address=%08lx",address);return false;}
     DWORD old=0;if(!VirtualProtect(at,5,PAGE_EXECUTE_READWRITE,&old))return false;*(DWORD*)(at+1)=(DWORD)(ULONG_PTR)replacement-(address+5);FlushInstructionCache(GetCurrentProcess(),at,5);DWORD ignored=0;bool ok=VirtualProtect(at,5,old,&ignored)!=0;log("AUTOTEST verified call patched address=%08lx original=%08lx",address,expected);return ok;
 }
-static bool patchIndirectUser32Call(DWORD address,DWORD iat,const char* name,void* replacement){
+static bool patchIndirectUser32Call(DWORD address,DWORD iat,const char* name,void* replacement,bool stockDvd){
     BYTE prior[6]={};DWORD import=0;FARPROC expected=GetProcAddress(GetModuleHandleW(L"user32.dll"),name);
-    if(!expected||!readMemory((void*)address,prior,6)||prior[0]!=0xff||prior[1]!=0x15||memcmp(prior+2,&iat,4)||!readMemory((void*)iat,&import,4)||import!=(DWORD)(ULONG_PTR)expected){
+    if(!expected||!readMemory((void*)address,prior,6)||prior[0]!=0xff||prior[1]!=0x15||memcmp(prior+2,&iat,4)||!readMemory((void*)iat,&import,4)||(!stockDvd&&import!=(DWORD)(ULONG_PTR)expected)){
         log("FAIL key-name call/IAT signature address=%08lx name=%s",address,name);return false;}
     BYTE patch[6]={0xe8,0,0,0,0,0x90};DWORD delta=(DWORD)(ULONG_PTR)replacement-(address+5);memcpy(patch+1,&delta,4);
     DWORD old=0;if(!VirtualProtect((void*)address,6,PAGE_EXECUTE_READWRITE,&old))return false;
     memcpy((void*)address,patch,6);bool flushed=FlushInstructionCache(GetCurrentProcess(),(void*)address,6)!=0;DWORD ignored=0;bool restored=VirtualProtect((void*)address,6,old,&ignored)!=0;
     log("INPUT verified key-name call patched address=%08lx name=%s protection_restored=%u",address,name,restored?1u:0u);return flushed&&restored;
 }
-static bool patchKeyboardLayoutCall(){
-    if(!patchIndirectUser32Call(0x52671f,0x5562a4,"MapVirtualKeyExW",(void*)keyNameMapVirtualKey)||
-       !patchIndirectUser32Call(0x52673a,0x556234,"ToUnicodeEx",(void*)keyNameToUnicode))return false;
+static bool patchKeyboardLayoutCall(bool stockDvd){
+    if(!patchIndirectUser32Call(0x52671f,stockDvd?0x556250:0x5562a4,"MapVirtualKeyExW",(void*)keyNameMapVirtualKey,stockDvd)||
+       !patchIndirectUser32Call(0x52673a,0x556234,"ToUnicodeEx",(void*)keyNameToUnicode,stockDvd))return false;
     // Exact-build FF15 [GetKeyboardLayout IAT] at52653C; E8+nop keeps all6
     // bytes and its stdcall argument/return contract. No process-wide IAT edit.
     const DWORD address=0x52653c,iat=0x5562a8;BYTE prior[6]={};DWORD import=0;
     FARPROC expected=GetProcAddress(GetModuleHandleW(L"user32.dll"),"GetKeyboardLayout");
     if(!expected||!readMemory((void*)address,prior,6)||prior[0]!=0xff||prior[1]!=0x15||
-       memcmp(prior+2,&iat,4)||!readMemory((void*)iat,&import,4)||import!=(DWORD)(ULONG_PTR)expected){
+       memcmp(prior+2,&iat,4)||!readMemory((void*)iat,&import,4)||(!stockDvd&&import!=(DWORD)(ULONG_PTR)expected)){
         log("FAIL canonical keyboard layout call/IAT signature");return false;
     }
     BYTE patch[6]={0xe8,0,0,0,0,0x90};DWORD delta=(DWORD)(ULONG_PTR)canonicalKeyboardLayout-(address+5);
@@ -3240,14 +3240,50 @@ static bool installCampaign(){
         (campaignHubSpawnIndex<0||(patchVerifiedCall(0x4d92a4,0x4d9f45,(void*)campaignSpawnCharacter)&&patchVerifiedCall(0x4d90eb,0x4e5b00,(void*)campaignLoadCharacterBridge)))&&
         ((!campaignHubPartner&&campaignHubSpawnIndex<0)||(patchVerifiedCall(0x4e5cb8,0x4e4feb,(void*)campaignBuildDescriptor)&&patchVerifiedCall(0x4e6261,0x4e629e,(void*)campaignLevelMemory)&&campaignBigCharacterObjects()));
 }
+// The DVD loader shares import thunks between unrelated APIs. Route each
+// verified game instruction through its own hook, preserving its call/jump
+// or register-load semantics. Leave loader and system-library imports alone.
+static bool installDvdImports() {
+    struct Site { const char* name; const char* library; DWORD address; WORD opcode; DWORD operand; };
+    static const Site sites[] = {
+#include "dvd_import_sites.inc"
+    };
+    for(const auto& site : sites){
+        BYTE* at=(BYTE*)site.address;
+        if(memcmp(at,&site.opcode,2)||memcmp(at+2,&site.operand,4)){
+            log("FAIL DVD import bytes at %08lx (%s)",site.address,site.name); return false;
+        }
+        for(auto& hook : hooks) if(!strcmp(hook.name,site.name)){
+            HMODULE library=GetModuleHandleA(site.library);
+            FARPROC api=library?GetProcAddress(library,site.name):NULL;
+            if(!api)return false;
+            if(hook.original)*hook.original=(void*)api;
+            DWORD old,ignore;
+            if(!VirtualProtect(at,6,PAGE_EXECUTE_READWRITE,&old))return false;
+            // Two RegCloseKey sites jump through loader stubs which return
+            // to the next six-byte instruction boundary.
+            if(at[0]==0xe9){at[0]=0xff; at[1]=0x15;}
+            DWORD operand=(DWORD)(ULONG_PTR)&hook.replacement;
+            memcpy(at+2,&operand,4);
+            FlushInstructionCache(GetCurrentProcess(),at,6);
+            if(!VirtualProtect(at,6,old,&ignore))return false;
+            hook.found=true;
+            break;
+        }
+    }
+    return true;
+}
 static bool install() {
     BYTE* base=(BYTE*)GetModuleHandleW(0);auto dos=(IMAGE_DOS_HEADER*)base;auto nt=(IMAGE_NT_HEADERS*)(base+dos->e_lfanew);
-    if(!selfTest){const BYTE expected[]={0xe8,3,4,0,0,0xe9,0x35,0xfd,0xff,0xff};if((ULONG_PTR)base!=0x400000||nt->FileHeader.Machine!=IMAGE_FILE_MACHINE_I386||nt->OptionalHeader.AddressOfEntryPoint!=0x12fd2c){log("FAIL game PE guard");return false;}
+    wchar_t dvdFlag[4]={};
+    bool stockDvd=!selfTest && GetEnvironmentVariableW(L"COOP_DVD_NATIVE",dvdFlag,4)==1 && dvdFlag[0]==L'1';
+    if(!selfTest){const BYTE expected[]={0xe8,3,4,0,0,0xe9,0x35,0xfd,0xff,0xff};if((ULONG_PTR)base!=0x400000||nt->FileHeader.Machine!=IMAGE_FILE_MACHINE_I386||nt->OptionalHeader.AddressOfEntryPoint!=(stockDvd?0x35606eu:0x12fd2cu)){log("FAIL game PE guard");return false;}
         // Entrypoint: the original instructions (the d3d9 proxy loads this probe at the entry and restores them first),
         // or the first two bytes still being the older injection launcher's EB FE gate.
-        BYTE* ep=base+nt->OptionalHeader.AddressOfEntryPoint;bool gated=ep[0]==0xeb&&ep[1]==0xfe;if((!gated&&memcmp(ep,expected,2))||memcmp(ep+2,expected+2,sizeof(expected)-2)){log("FAIL entry signature");return false;}}
+        BYTE* ep=base+0x12fd2c;bool gated=ep[0]==0xeb&&ep[1]==0xfe;if((!gated&&memcmp(ep,expected,2))||memcmp(ep+2,expected+2,sizeof(expected)-2)){log("FAIL entry signature");return false;}}
     auto desc=(IMAGE_IMPORT_DESCRIPTOR*)(base+nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
-    for(;desc->Name;desc++){auto names=desc->OriginalFirstThunk?(IMAGE_THUNK_DATA*)(base+desc->OriginalFirstThunk):0;auto slots=(IMAGE_THUNK_DATA*)(base+desc->FirstThunk);const char* dllName=(const char*)(base+desc->Name);HMODULE dependency=GetModuleHandleA(dllName);if(!dependency){log("FAIL dependency absent %s",dllName);return false;}
+    if(stockDvd){if(!installDvdImports())return false;}
+    else for(;desc->Name;desc++){auto names=desc->OriginalFirstThunk?(IMAGE_THUNK_DATA*)(base+desc->OriginalFirstThunk):0;auto slots=(IMAGE_THUNK_DATA*)(base+desc->FirstThunk);const char* dllName=(const char*)(base+desc->Name);HMODULE dependency=GetModuleHandleA(dllName);if(!dependency){log("FAIL dependency absent %s",dllName);return false;}
         log("imports module=%s names=%s",dllName,names?"OFT":"resolved-IAT-export-match");
         for(;slots->u1.Function;slots++){const char* name=0;if(names){if(!IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal))name=(const char*)((IMAGE_IMPORT_BY_NAME*)(base+names->u1.AddressOfData))->Name;names++;}
             for(auto&h:hooks){bool match=name?!strcmp(name,h.name):(!desc->OriginalFirstThunk&&(ULONG_PTR)GetProcAddress(dependency,h.name)==slots->u1.Function);if(match){DWORD old;if(!VirtualProtect(&slots->u1.Function,sizeof(void*),PAGE_READWRITE,&old))return false;if(h.original)*h.original=(void*)(ULONG_PTR)slots->u1.Function;slots->u1.Function=(ULONG_PTR)h.replacement;DWORD ignore;if(!VirtualProtect(&slots->u1.Function,sizeof(void*),old,&ignore))return false;h.found=true;log("IAT hooked %s",h.name);break;}}}}
@@ -3265,7 +3301,7 @@ static bool install() {
     if(!selfTest&&(networkRole||networkDeferred))for(DWORD address:rngCallSites)if(!patchVerifiedCall(address,0x4318f5,(void*)randomEntry))return false;
     if(!selfTest&&humanKeyboardFixture&&!patchVerifiedCall(0x525c00,0x526240,(void*)keyboardPollFixture))return false;
     if(!selfTest&&humanInputMode)for(DWORD address:deviceCallSites)if(!patchVerifiedCall(address,0x40182d,(void*)reassignLocalDevice))return false;
-    if(!selfTest&&humanInputMode&&(!patchKeyboardLayoutCall()||!patchVerifiedCall(0x52a770,0x525c30,(void*)guardedKeyLookup)))return false;
+    if(!selfTest&&humanInputMode&&(!patchKeyboardLayoutCall(stockDvd)||!patchVerifiedCall(0x52a770,0x525c30,(void*)guardedKeyLookup)))return false;
     if(campaignMode&&!installCampaign())return false;
     if(!selfTest&&!autoTest&&!installMainMenuAudio())return false;
     if(campaignMode&&(networkRole||networkDeferred)&&(!installNisGate()||!installExitGate()||!installNisStopGate()||!installStageLog()))return false;

@@ -122,12 +122,21 @@ def hash_file(path):
 
 
 PROXY_MARKER = "COOP_PROXY_PROBE".encode("utf-16-le")
+SAFEDISC_DLL_SHA256 = "3b4ba415415e93ec01994093388132153fe270692fe7f6cabbbaba49fd047f75"
+DVD_GAME_SHA256 = "b9130323b5d842cf11672aac440c5f880ab637d83c99b720cf110baa81feb129"
 
 
 def own_proxy_file(name, found):
     """native-launcher puts its d3d9 proxy and the chain copy beside Game.exe while the game runs and
     replaces an older build of it before launch. Accept this add-on's proxy (every build carries the
     UTF-16 name COOP_PROXY_PROBE) and the chain copy next to it; any other d3d9 stays an unknown DLL."""
+    if name == "version.dll":
+        try:
+            path = Path(found[name])
+            no_reparse(path)
+            return path.stat().st_size <= 8 * 1024 * 1024 and hash_file(path)[1] == SAFEDISC_DLL_SHA256
+        except (Rejected, OSError):
+            return False
     if name == "d3d9_chain.dll":
         return "d3d9.dll" in found and own_proxy_file("d3d9.dll", found)
     if name != "d3d9.dll":
@@ -149,7 +158,7 @@ def verify_records(baseline, found, hasher=hash_file, own_proxy=own_proxy_file):
     if missing:
         raise Rejected("Missing runtime file: " + sorted(missing)[0])
     for path in sorted(found):
-        if path in ("d3d9.dll", "d3d9_chain.dll") and own_proxy is not None and own_proxy(path, found):
+        if path in ("d3d9.dll", "d3d9_chain.dll", "version.dll") and own_proxy is not None and own_proxy(path, found):
             continue
         if path.endswith(".dll") and path != "binkw32.dll":
             raise Rejected("Unknown DLL: " + path)
@@ -159,10 +168,13 @@ def verify_records(baseline, found, hasher=hash_file, own_proxy=own_proxy_file):
     order = sorted(expected, key=lambda p: (not p.startswith("ini/"), p))
     actual = {}
     candidates = set(packs)
+    dvd_executable = False
     for path in order:
         actual[path] = hasher(found[path])
         if path in core:
-            if actual[path] != core[path]:
+            if path == "game.exe" and actual[path] == [3790912, DVD_GAME_SHA256]:
+                dvd_executable = True
+            elif actual[path] != core[path]:
                 raise Rejected("Critical content mismatch: " + path)
         else:
             candidates = {name for name in candidates if actual[path] == packs[name]["files"][path]}
@@ -171,7 +183,15 @@ def verify_records(baseline, found, hasher=hash_file, own_proxy=own_proxy_file):
     if len(candidates) != 1:
         raise Rejected("Language pack is ambiguous")
     language = candidates.pop()
+    if dvd_executable and language != "English":
+        raise Rejected("DVD executable requires English game data")
+    if "version.dll" in found and not dvd_executable:
+        raise Rejected("SafeDisc compatibility DLL requires the stock English DVD executable")
     actual_core = {p: actual[p] for p in core}
+    if dvd_executable:
+        # The verified DVD build runs the same simulation; preserve the canonical
+        # shared-content digest used by the wire protocol.
+        actual_core["game.exe"] = core["game.exe"]
     actual_locale = {p: actual[p] for p in packs[language]["files"]}
     return {
         "schema": "coop-fof-preflight-v1", "status": "pass", "language": language,

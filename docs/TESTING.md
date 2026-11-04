@@ -6,6 +6,16 @@ Commands below are source entrypoints, checked against the repository. They are 
 
 The player pre-release **v1.1.0-beta** uses scenario 13 / protocol 6. Production live joining is enabled by default for retail campaigns; the fixture flag is for research builds only. Both test peers need matching builds. The earlier v1.0.1-beta uses scenario 12 / protocol 5.
 
+## Original English DVD
+
+Import the stock DVD into two separate workspace copies (`test/english` and `test/english-peer`). Place the packaged, pinned `version.dll` beside `native-launcher.exe` in `probe`. Build the research probe for the scripted campaign, then run the following from the project root:
+
+```powershell
+python -I launcher/play_lifecycle.py --name dvd-pair-check --stock-dvd-pair --campaign --together --skip-cutscenes both --frames 600 --seconds 260
+```
+
+The runner requires the native launcher to report the stock DVD executable hash for each seat. It compares the two games' RNG, positions, inputs, world and mission state over loopback and checks for clean exits.
+
 ## Live mission admission
 
 The release reconstructs a joining client's mission from bounded recorded inputs, checks every recorded state sample, and resumes at the host's current tick. The host waits in place; it does not return to the hub or restart an area. Native AI/player transitions preserve existing actors, positions, health and area identity. The completed checks below retain their bounded local scope.

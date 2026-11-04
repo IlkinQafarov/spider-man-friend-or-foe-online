@@ -14,11 +14,10 @@ CSC = Path(r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe")
 CORE = (
     "launcher/fof-private-launcher.exe", "probe/native-launcher.exe",
     "probe/native-probe.dll", "probe/d3d9.dll", "steam/native/native-relay.exe",
+    "probe/version.dll", "probe/safedisc-source.zip", "probe/SAFE-DISC-LICENSE.txt",
     "steam/native/steam_appid.txt", "compatibility/baseline.json",
 )
-BG = tuple("launcher/assets/backgrounds/{}.png".format(x) for x in ("header", "host", "join"))
-FOREGROUND = "launcher/assets/foreground/title.png"
-ICONS = ("launcher/assets/foreground/host-icon.png", "launcher/assets/foreground/join-icon.png")
+ROOFTOP = tuple("launcher/assets/rooftop/{}.png".format(x) for x in ("distant-city", "swing-sign", "front", "live-plates"))
 MAGIC = b"FOFBNDL1"
 
 
@@ -72,11 +71,9 @@ def collect(package):
         raise Rejected("Input must be a player package built by launcher/build_package.py --player")
     files = manifest["files"]
     names = set(files)
-    allowed = set(CORE) | set(BG) | set(ICONS) | {FOREGROUND, "README.md", "Start.cmd"}
-    if not set(CORE).issubset(names) or not names.issubset(allowed):
+    allowed = set(CORE) | set(ROOFTOP) | {"README.md", "Start.cmd"}
+    if not (set(CORE) | set(ROOFTOP)).issubset(names) or not names.issubset(allowed):
         raise Rejected("Package manifest file set is outside the fixed own-code allowlist")
-    if names - set(CORE) - set(BG) - set(ICONS) - {FOREGROUND, "README.md", "Start.cmd"}:
-        raise Rejected("Unexpected manifest content")
     actual = set()
     for current, dirs, filenames in os.walk(str(root), topdown=True, followlinks=False):
         current_path = Path(current)
@@ -99,7 +96,7 @@ def collect(package):
         data = safe_file(root, rel).read_bytes()
         if type(entry["size"]) is not int or entry["size"] != len(data) or entry["sha256"] != digest(data):
             raise Rejected("Manifest hash or size mismatch: " + rel)
-        if rel in CORE or rel in BG or rel == FOREGROUND or rel in ICONS:
+        if rel in CORE or rel in ROOFTOP:
             result[rel] = data
     if result["steam/native/steam_appid.txt"].strip() != b"480":
         raise Rejected("Unexpected Steam app metadata")
@@ -130,6 +127,7 @@ def build(package, output):
         compiled = Path(temp) / "FriendOrFoe.exe"
         archive(files, archive_path)
         cmd = [str(CSC), "/nologo", "/codepage:65001", "/warn:4", "/warnaserror", "/target:winexe",
+               "/win32icon:" + str(HERE / "assets" / "icons" / "launcher.ico"),
                "/platform:x64", "/optimize+", "/out:" + str(compiled), "/resource:" + str(archive_path) + ",fof.bundle",
                "/reference:System.dll", "/reference:System.Windows.Forms.dll", str(HERE / "Bundle.cs")]
         proc = subprocess.run(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -149,10 +147,8 @@ def selftest():
         root = Path(raw)
         files = {p: (b"synthetic own-code fixture " + p.encode("ascii")) for p in CORE}
         files["steam/native/steam_appid.txt"] = b"480\r\n"
-        for p in BG:
-            files[p] = b"synthetic background fixture " + p.encode("ascii")
-        files[FOREGROUND] = b"synthetic foreground fixture " + FOREGROUND.encode("ascii")
-        for icon in ICONS: files[icon]=b"synthetic icon fixture "+icon.encode("ascii")
+        for p in ROOFTOP:
+            files[p] = b"synthetic rooftop fixture " + p.encode("ascii")
         files["README.md"] = b"synthetic README"
         files["Start.cmd"] = b"synthetic launcher stub"
         manifest = {"schema": "fof-private-package-v1", "status": "beta-player-build", "edition": "player",
@@ -160,7 +156,7 @@ def selftest():
         for p, data in files.items():
             f = root.joinpath(*p.split("/")); f.parent.mkdir(parents=True, exist_ok=True); f.write_bytes(data)
         (root / "SHA256SUMS.json").write_text(json.dumps(manifest), encoding="utf-8")
-        assert set(collect(root)) == set(CORE) | set(BG) | set(ICONS) | {FOREGROUND}
+        assert set(collect(root)) == set(CORE) | set(ROOFTOP)
         good = collect(root)
         manifest["files"]["probe/native-probe.dll"]["sha256"] = "0" * 64
         (root / "SHA256SUMS.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -172,7 +168,7 @@ def selftest():
             raise AssertionError("corrupt manifest accepted")
         archive(good, root / "fixture.bin")
         assert (root / "fixture.bin").read_bytes().startswith(MAGIC)
-    print("BUNDLE_BUILDER_SELFTEST_PASS synthetic-manifest/allowlist/backgrounds/foreground/hash/archive")
+    print("BUNDLE_BUILDER_SELFTEST_PASS synthetic-manifest/allowlist/rooftop/hash/archive")
 
 
 def main():

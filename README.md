@@ -4,7 +4,15 @@
 
 Two friends, two Windows game instances, and an independent English or Russian language choice on each PC. This project connects the game's native two-player controls through a synchronized input stream.
 
-**Beta · active development.** Player builds are on the [Releases](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases) page (the newest is v1.2.0-beta; expect some bugs). No game files or Steam libraries are distributed here: you need your own copy of the game. The launcher's play mode uses the native campaign route; the bounded Tokyo scenario remains for automated connection checks.
+**Beta · active development.** Player builds are on the [Releases](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases) page (the newest is v1.3.0-beta; expect some bugs). No game files or Steam libraries are distributed here: you need your own copy of the game. The launcher's play mode uses the native campaign route; the bounded Tokyo scenario remains for automated connection checks.
+
+## v1.3.0-beta: rooftop launcher, comic-paper menus and original DVD support
+
+The launcher now has an illustrated rooftop home screen and matching comic-paper lobby, Join and Settings menus. Settings has Display, Game & Steam, and Help & Log tabs. Eleven languages, readable mode, keyboard controls and selectable lobby codes remain available. Host verification can be cancelled and retried before a game or Steam lobby starts. Short original sounds and a launcher icon complete the update.
+
+The stock English DVD executable is supported alongside the existing English/Russian build. Import your own game; the original installation is not modified. The release includes the pinned SafeDiscLoader2 compatibility library, matching source and GPLv3 license. No game files or Steam library are bundled.
+
+The download is the player edition. Test bots, scripted test scenarios and fault fixtures cannot be enabled; QA scripts are not shipped. Normal play has no test frame limit. Required co-op synchronization and guest catch-up still apply. See [launcher details](docs/LAUNCHER.md) and [verification and limits](docs/STATUS.md).
 
 ## Join an active mission
 
@@ -84,13 +92,14 @@ Start with [Building](docs/BUILDING.md), [Testing](docs/TESTING.md) and the [Arc
 
 ## Compatibility
 
-The only studied target is the Windows x86 `Game.exe`, version **1.0.0.111**, SHA-256:
+The launcher accepts two Windows x86 executables by SHA-256.
 
-```text
-ebd30047d7e58c95bf7dc4bd1fb4a5780e16aa472b61c25a8c421632662083db
-```
+| PC copy | Game.exe SHA-256 |
+| --- | --- |
+| English or Russian PC build 1.0.0.111 | `ebd30047d7e58c95bf7dc4bd1fb4a5780e16aa472b61c25a8c421632662083db` |
+| Original English DVD (`Spider-Man-Friend-or-Foe_Win_EN_DVD`) | `b9130323b5d842cf11672aac440c5f880ab637d83c99b720cf110baa81feb129` |
 
-Other executables and unknown translations are unsupported. The engine's exact identity is not verified; this project does not claim generic engine compatibility. Use your own game copy. Import and testing operate on new copies and isolated session directories, preserving original installs and saves.
+For the **stock English DVD**, open **Settings → Game & Steam → Locate game install** and select the installed Activision game folder. The launcher verifies the DVD files and runs its original `Game.exe` from the private import. The launcher supplies a [SafeDiscLoader2](https://github.com/nckstwrt/SafeDiscLoader2/tree/91b6b89da8296276c36ff1a8fea2456c892ca865) compatibility library for that build. Its corresponding source and GPLv3 license are in the package’s `probe` folder.
 
 ## Project context and license
 

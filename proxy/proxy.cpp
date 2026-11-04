@@ -34,7 +34,9 @@
 static BYTE* g_entry = 0;
 static BYTE  g_saved[5] = {0};
 static bool  g_patched = false;
-
+// The DVD loader decrypts .text before this final jump. Detour the loader's
+// transfer, never the encrypted instructions at the destination.
+static BYTE* g_patchSite = 0;
 // Append-only diagnostics to <COOP_PROBE_ROOT>\proxy.log when the launcher has set
 // that variable; silent otherwise. Never touches game files.
 static void logline(const char* fmt, ...) {
@@ -66,11 +68,13 @@ static void logline(const char* fmt, ...) {
 // hooks before any game code runs), then fall through to the original entry.
 static void onEntryReached() {
     DWORD old = 0;
-    if (VirtualProtect(g_entry, 5, PAGE_EXECUTE_READWRITE, &old)) {
-        memcpy(g_entry, g_saved, 5);
-        VirtualProtect(g_entry, 5, old, &old);
-        FlushInstructionCache(GetCurrentProcess(), g_entry, 5);
+    if (!VirtualProtect(g_patchSite, 5, PAGE_EXECUTE_READWRITE, &old)) {
+        TerminateProcess(GetCurrentProcess(), 4);
+        return;
     }
+    memcpy(g_patchSite, g_saved, 5);
+    VirtualProtect(g_patchSite, 5, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), g_patchSite, 5);
     wchar_t name[MAX_PATH] = L"native-probe.dll";
     GetEnvironmentVariableW(L"COOP_PROXY_PROBE", name, MAX_PATH);  // optional override
     HMODULE probe = LoadLibraryW(name);
@@ -108,14 +112,25 @@ static void patchEntry() {
     if (nt->Signature != IMAGE_NT_SIGNATURE) return;
     g_entry = (BYTE*)base + nt->OptionalHeader.AddressOfEntryPoint;
 
+    g_patchSite = g_entry;
+    wchar_t dvd[4] = {};
+    if (GetEnvironmentVariableW(L"COOP_DVD_NATIVE", dvd, 4) == 1 && dvd[0] == L'1') {
+        if ((DWORD)base != 0x400000 || (DWORD)g_entry != 0x75606e) return;
+        g_patchSite = (BYTE*)0x75612b;
+        g_entry = (BYTE*)0x52fd2c;
+        if (g_patchSite[0] != 0xe9 || g_patchSite + 5 + *(LONG*)(g_patchSite + 1) != g_entry) {
+            logline("proxy: unexpected DVD transfer bytes\n");
+            return;
+        }
+    }
     DWORD old = 0;
-    if (!VirtualProtect(g_entry, 5, PAGE_EXECUTE_READWRITE, &old)) return;
-    memcpy(g_saved, g_entry, 5);
-    LONG rel = (LONG)((BYTE*)entryStub - (g_entry + 5));
-    g_entry[0] = 0xE9;
-    memcpy(g_entry + 1, &rel, 4);
-    VirtualProtect(g_entry, 5, old, &old);
-    FlushInstructionCache(GetCurrentProcess(), g_entry, 5);
+    if (!VirtualProtect(g_patchSite, 5, PAGE_EXECUTE_READWRITE, &old)) return;
+    memcpy(g_saved, g_patchSite, 5);
+    LONG rel = (LONG)((BYTE*)entryStub - (g_patchSite + 5));
+    g_patchSite[0] = 0xE9;
+    memcpy(g_patchSite + 1, &rel, 4);
+    VirtualProtect(g_patchSite, 5, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), g_patchSite, 5);
     g_patched = true;
     logline("proxy: entry detour armed at %p\n", (void*)g_entry);
 }

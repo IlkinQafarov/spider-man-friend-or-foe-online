@@ -8,12 +8,39 @@
 #pragma comment(lib,"bcrypt.lib")
 
 static const char expectedHash[]="ebd30047d7e58c95bf7dc4bd1fb4a5780e16aa472b61c25a8c421632662083db";
+static const char dvdHash[]="b9130323b5d842cf11672aac440c5f880ab637d83c99b720cf110baa81feb129";
+static const char safeDiscHash[]="3b4ba415415e93ec01994093388132153fe270692fe7f6cabbbaba49fd047f75";
 static bool sha(const wchar_t* path,char* result){HANDLE file=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ,0,OPEN_EXISTING,0,0);if(file==INVALID_HANDLE_VALUE)return false;BCRYPT_ALG_HANDLE alg=0;BCRYPT_HASH_HANDLE hash=0;bool ok=BCryptOpenAlgorithmProvider(&alg,BCRYPT_SHA256_ALGORITHM,0,0)>=0;DWORD n=0,needed=0;BYTE* object=0;BYTE digest[32],data[65536];if(ok)ok=BCryptGetProperty(alg,BCRYPT_OBJECT_LENGTH,(BYTE*)&n,sizeof(n),&needed,0)>=0;if(ok){object=(BYTE*)HeapAlloc(GetProcessHeap(),0,n);ok=object&&BCryptCreateHash(alg,&hash,object,n,0,0,0)>=0;}DWORD got=0;while(ok){if(!ReadFile(file,data,sizeof(data),&got,0)){ok=false;break;}if(!got)break;ok=BCryptHashData(hash,data,got,0)>=0;}if(ok)ok=BCryptFinishHash(hash,digest,32,0)>=0;for(unsigned i=0;ok&&i<32;i++)sprintf(result+i*2,"%02x",digest[i]);if(hash)BCryptDestroyHash(hash);if(alg)BCryptCloseAlgorithmProvider(alg,0);if(object)HeapFree(GetProcessHeap(),0,object);CloseHandle(file);return ok;}
 static bool pe(const wchar_t* path,DWORD& entry){HANDLE h=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ,0,OPEN_EXISTING,0,0);if(h==INVALID_HANDLE_VALUE)return false;BYTE data[4096];DWORD n;bool ok=ReadFile(h,data,sizeof(data),&n,0)&&n==sizeof(data);CloseHandle(h);if(!ok)return false;auto dos=(IMAGE_DOS_HEADER*)data;if(dos->e_magic!=IMAGE_DOS_SIGNATURE||dos->e_lfanew<0||dos->e_lfanew>2048)return false;auto nt=(IMAGE_NT_HEADERS*)(data+dos->e_lfanew);if(nt->Signature!=IMAGE_NT_SIGNATURE||nt->FileHeader.Machine!=IMAGE_FILE_MACHINE_I386||nt->OptionalHeader.Magic!=IMAGE_NT_OPTIONAL_HDR32_MAGIC||nt->OptionalHeader.ImageBase!=0x400000||nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].Size)return false;entry=0x400000+nt->OptionalHeader.AddressOfEntryPoint;return true;}
 static void parentDir(wchar_t* p){wchar_t* s=wcsrchr(p,L'\\');if(s)*s=0;}
 static bool absolute(const wchar_t* p,wchar_t* out){DWORD n=GetFullPathNameW(p,32768,out,0);return n&&n<32768;}
 static bool within(const wchar_t* p,const wchar_t* root){size_t n=wcslen(root);return !_wcsnicmp(p,root,n)&&(p[n]==0||p[n]=='\\');}
 static bool noReparse(const wchar_t* path){wchar_t b[32768];lstrcpyW(b,path);for(wchar_t* p=b+3;*p;p++)if(*p=='\\'){*p=0;DWORD a=GetFileAttributesW(b);*p='\\';if(a!=INVALID_FILE_ATTRIBUTES&&(a&FILE_ATTRIBUTE_REPARSE_POINT))return false;}DWORD a=GetFileAttributesW(b);return a==INVALID_FILE_ATTRIBUTES||!(a&FILE_ATTRIBUTE_REPARSE_POINT);}
+// Hold the compatibility DLL read-only through process exit. Delete only the
+// verified companion in the imported game directory. No arbitrary DLL is replaced.
+struct DvdCompanion {
+    wchar_t path[32768] = {};
+    HANDLE lock = INVALID_HANDLE_VALUE;
+    bool stage(const wchar_t* ownDir, const wchar_t* gameDir) {
+        wchar_t source[32768]; char digest[65] = {};
+        _snwprintf_s(source, 32768, _TRUNCATE, L"%s\\version.dll", ownDir);
+        _snwprintf_s(path, 32768, _TRUNCATE, L"%s\\version.dll", gameDir);
+        if (!noReparse(source) || !noReparse(path) || !sha(source,digest) || strcmp(digest,safeDiscHash)) return false;
+        if (!CopyFileW(source,path,TRUE) && GetLastError()!=ERROR_FILE_EXISTS) return false;
+        lock=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ,0,OPEN_EXISTING,0,0);
+        if (lock==INVALID_HANDLE_VALUE || !sha(path,digest) || strcmp(digest,safeDiscHash)) {
+            path[0]=0; return false;
+        }
+        return true;
+    }
+    ~DvdCompanion() {
+        if (lock!=INVALID_HANDLE_VALUE) {
+            CloseHandle(lock);
+            char digest[65] = {};
+            if (path[0] && sha(path,digest) && !strcmp(digest,safeDiscHash)) DeleteFileW(path);
+        }
+    }
+};
 // 0 = proxy has not reached the game's entry yet, 1 = probe loaded, 2 = probe failed to load.
 static int proxyState(const wchar_t* path){HANDLE file=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,0,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,0);if(file==INVALID_HANDLE_VALUE)return 0;char text[4096]={};DWORD read=0;BOOL ok=ReadFile(file,text,sizeof(text)-1,&read,0);CloseHandle(file);if(!ok)return 0;const char* entry=strstr(text,"entry reached");if(!entry)return 0;const char* handle=strstr(entry,"handle=");return handle&&strncmp(handle,"handle=00000000",15)&&strncmp(handle,"handle=0000000000000000",23)?1:2;}
 // The probe's own log also proves it loaded (its READY line is written only after all pre-entry hooks are installed);
@@ -38,13 +65,18 @@ int wmain(int argc,wchar_t** argv){bool self=argc>=2&&!wcscmp(argv[1],L"--selfte
     if((!self&&!within(exe,testRoot))||!within(sandbox,localRoot)||within(sandbox,incomingRoot)||!noReparse(exe)||!noReparse(sandbox)){fprintf(stderr,"Target must be under local test/; sandbox must stay in local workspace and outside incoming/; no reparse points.\n");return 2;}
     _snwprintf(dll,32768,L"%s\\native-probe.dll",ownDir);lstrcpyW(gameDir,exe);parentDir(gameDir);DWORD seconds=15;if(!play&&argc>3)seconds=wcstoul(argv[3],0,10);if(!play&&(seconds<1||seconds>(self?60u:1200u)))return 2;
     if(GetFileAttributesW(sandbox)!=INVALID_FILE_ATTRIBUTES){fwprintf(stderr,L"Sandbox must be a NEW directory.\n");return 2;}
-    char digest[65]={0};DWORD entry=0;if(!sha(exe,digest)||(!self&&strcmp(digest,expectedHash))||!pe(exe,entry)){fprintf(stderr,"Executable SHA/PE/TLS guard failed. SHA=%s\n",digest);return 3;}
-    if(!self&&(entry!=0x52fd2c)){fprintf(stderr,"Unexpected entrypoint.\n");return 3;}if(GetFileAttributesW(dll)==INVALID_FILE_ATTRIBUTES)return 3;
+    char digest[65]={0};DWORD entry=0;bool dvd=false;if(!sha(exe,digest)){fprintf(stderr,"Executable SHA/PE/TLS guard failed. SHA=%s\n",digest);return 3;}dvd=!self&&!strcmp(digest,dvdHash);if((!self&&!dvd&&strcmp(digest,expectedHash))||!pe(exe,entry)){fprintf(stderr,"Executable SHA/PE/TLS guard failed. SHA=%s\n",digest);return 3;}
+    if(!self&&((dvd&&entry!=0x75606e)||(!dvd&&entry!=0x52fd2c))){fprintf(stderr,"Unexpected entrypoint.\n");return 3;}if(GetFileAttributesW(dll)==INVALID_FILE_ATTRIBUTES)return 3;
     if(!CreateDirectoryW(sandbox,0)){fwprintf(stderr,L"Unable to create new sandbox, error=%lu\n",GetLastError());return 3;}
-    SetEnvironmentVariableW(L"COOP_PROBE_ROOT",sandbox);SetEnvironmentVariableW(L"COOP_PROBE_GAME_ROOT",gameDir);SetEnvironmentVariableW(L"COOP_PROBE_SELFTEST",self?L"1":L"0");
+    SetEnvironmentVariableW(L"COOP_PROBE_ROOT",sandbox);SetEnvironmentVariableW(L"COOP_DVD_NATIVE",dvd?L"1":L"0");SetEnvironmentVariableW(L"COOP_PROBE_GAME_ROOT",gameDir);SetEnvironmentVariableW(L"COOP_PROBE_SELFTEST",self?L"1":L"0");
+    DvdCompanion dvdLibrary;
+    if(dvd) {
+        if(!dvdLibrary.stage(ownDir,gameDir)){fprintf(stderr,"DVD compatibility DLL missing or unrecognized.\n");return 3;}
+        if(!SetEnvironmentVariableW(L"TMP",sandbox)||!SetEnvironmentVariableW(L"TEMP",sandbox))return 3;
+    }
     if(self){wchar_t denied[32768],control[32768];_snwprintf(denied,32768,L"%s\\analysis\\native\\selftest-denied-%lu-%llu.txt",localRoot,GetCurrentProcessId(),GetTickCount64());_snwprintf(control,32768,L"%s-control",denied);if(within(denied,gameDir)||within(denied,sandbox)||GetFileAttributesW(denied)!=INVALID_FILE_ATTRIBUTES)return 3;HANDLE check=CreateFileW(control,GENERIC_WRITE,0,0,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,0);if(check==INVALID_HANDLE_VALUE){fprintf(stderr,"Selftest ACL-control file creation failed.\n");return 3;}CloseHandle(check);SetEnvironmentVariableW(L"COOP_PROBE_DENIED_WRITE",denied);printf("SELFTEST_ACL_CONTROL_CREATED\n");}
     wchar_t cmd[32768];_snwprintf(cmd,32768,L"\"%s\"",exe);STARTUPINFOW si={sizeof(si)};si.dwFlags=STARTF_USESHOWWINDOW;si.wShowWindow=SW_SHOWNOACTIVATE;PROCESS_INFORMATION pi={};
-    HANDLE job=CreateJobObjectW(0,0);JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits={};limits.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE|JOB_OBJECT_LIMIT_ACTIVE_PROCESS;limits.BasicLimitInformation.ActiveProcessLimit=1;if(!job||!SetInformationJobObject(job,JobObjectExtendedLimitInformation,&limits,sizeof(limits)))return 4;
+    HANDLE job=CreateJobObjectW(0,0);JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits={};limits.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE|JOB_OBJECT_LIMIT_ACTIVE_PROCESS;limits.BasicLimitInformation.ActiveProcessLimit=dvd?2:1;if(!job||!SetInformationJobObject(job,JobObjectExtendedLimitInformation,&limits,sizeof(limits)))return 4;
     // Load path: a d3d9.dll proxy beside Game.exe is loaded by Windows itself (the game imports d3d9) and loads native-probe.dll at the
     // game's entry point. This launcher writes nothing into the game's memory and starts no remote thread.
     static wchar_t proxySrc[32768],proxyDst[32768],chainDst[32768],systemD3d[32768];_snwprintf(proxySrc,32768,L"%s\\d3d9.dll",ownDir);_snwprintf(proxyDst,32768,L"%s\\d3d9.dll",gameDir);_snwprintf(chainDst,32768,L"%s\\d3d9_chain.dll",gameDir);

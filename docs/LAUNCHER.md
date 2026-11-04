@@ -2,31 +2,25 @@
 
 The visible launcher uses WPF with the established C# session/import/profile backend. It has two large Host/Join panels, a selectable lobby code, Settings and Help cards, and eleven UI languages. Game language is independently English or Russian. Protocol remains 6.
 
-## Current source revision (1 November 2026)
+## Current source revision (4 November 2026)
 
-The illustrated layout uses a fixed 900x600 logical-unit window. It can be moved, minimized and closed; resizing and maximizing are disabled. A smaller monitor work area can reduce the window to keep it visible. A reversible standing-person accessibility toggle switches to readable Segoe UI fonts, horizontal labels and grey boards. Keyboard focus stays inside open cards, Escape closes them, and focus returns to the invoking control.
+The rooftop layout with comic-paper lobby, Join and Settings menus uses a fixed 900x600 logical-unit window. It can be moved, minimized and closed; resizing and maximizing are disabled. A smaller monitor work area can reduce the window to keep it visible. A reversible standing-person accessibility toggle switches to readable Segoe UI fonts, horizontal labels and grey boards. Keyboard focus stays inside open cards, Escape closes them, and focus returns to the invoking control.
 
-Hosting shows a large copyable lobby code and Stop action. Joining shows progress without inventing a lobby code. Long status messages wrap and scroll. The host receives a seven-second, translated, nonmodal notification when the relay validates the peer's session connection. It does not take focus or input, and does not claim that game catch-up has completed. Duplicate events are suppressed; reconnecting produces a new notice.
+Hosting shows a large copyable lobby code and Stop action. During pre-launch verification, Cancel stops the current attempt and allows retry; closing also cancels verification. Settings contains Display, Game & Steam, and Help & Log tabs. Joining shows progress without inventing a lobby code. Long status messages wrap and scroll. The host receives a seven-second, translated, nonmodal notification when the relay validates the peer's session connection. It does not take focus or input, and does not claim that game catch-up has completed. Duplicate events are suppressed; reconnecting produces a new notice.
 
 The joiner's in-game New Game and Load/Continue rows are hidden while waiting for the host. Native row indices and automatic host-driven startup are preserved; the host's menu is unchanged. The guest's Options and Quit rows retain the native renderer and indices.
 
 Steam component discovery follows registered libraries across drives and checks conventional Steam/SteamLibrary locations on every ready local fixed/removable drive. It searches installed game folders, not every file on the disk. Every candidate still needs the required x64 exports and a valid Valve signature. Discovery reads files without loading Steam or using an account.
 
-These changes ship in [v1.2.0-beta](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases/tag/v1.2.0-beta). The earlier v1.1.0-beta download predates this launcher and remains available separately. Future source-only commits do not automatically replace release downloads.
+These changes ship in [v1.3.0-beta](https://github.com/IlkinQafarov/spider-man-friend-or-foe-online/releases/tag/v1.3.0-beta). The earlier v1.1.0-beta download predates this launcher and remains available separately. Future source-only commits do not automatically replace release downloads.
 
 ## Editable artwork
 
-Three independent background layers are kept in `launcher/assets/backgrounds/`:
+The current scene uses `launcher/assets/rooftop/{distant-city,swing-sign,front}.png`, with live-label and hover atlases in the same folder. Comic-paper frames live in `launcher/assets/comic-paper/` and are embedded in the launcher. Runtime drawing preserves corner and edge shapes; text, buttons, inputs and tabs remain WPF controls. Readable mode reduces paper texture and restores plain dark headings. The older background/foreground art remains in the source for historical revisions.
 
-| File | Scene |
-| --- | --- |
-| `header.png` | New York skyline and flying carrier |
-| `host.png` | Red sunset flight deck |
-| `join.png` | Blue moonlit Tokyo rooftops |
+Original short WAV cues live in `launcher/assets/sounds/`; only arrival, click and close are embedded. The launcher icon is adapted from its generated rooftop sign artwork. Pinned third-party SVGs and their license/provenance remain in `launcher/assets/icons/`.
 
-Separate transparent foregrounds live in `launcher/assets/foreground/`: `title.png`, `host-icon.png` and `join-icon.png`. They are generated UI artwork, not extracted game assets. Text, buttons, panel frames and live status are WPF elements. Pinned third-party accessibility SVGs and their complete license/provenance live in `launcher/assets/icons/`.
-
-Replace the source PNGs and rebuild to change the artwork permanently. Backgrounds use uniform-to-fill cropping. The bootstrapper restores edited runtime assets from its embedded copy, so changing extracted PNGs alone does not survive the next launch. Review the art hashes in `qa/prepare_publication.py` when intentionally changing source assets.
+Rebuild to change artwork permanently. The bootstrapper restores extracted runtime files from its embedded copy. Review the exact asset pins in `qa/prepare_publication.py` when intentionally changing source art.
 
 ## Build
 

@@ -7,9 +7,9 @@ using System.Windows.Forms;
 namespace FofPrivate {
 public sealed class BackendState {
     public int FriendJoinedSequence;
-    public bool HostEnabled,JoinEnabled,StopEnabled,SetupEnabled,GameReady,SteamReady,Active;
+    public bool HostEnabled,JoinEnabled,StopEnabled,SetupEnabled,GameReady,SteamReady,Active,VerifyingSession;
     public string Lobby,Activity,Log,SteamPath,Resolution;
-    public int GameLanguage,DisplayMode;
+    public int DisplayMode;
     public string[] Resolutions;
 }
 // Keep launch verification, process ownership, transport, import and profile semantics in one place.
@@ -31,22 +31,28 @@ sealed partial class LauncherForm {
     }
     public BackendState Snapshot(){return new BackendState{
         FriendJoinedSequence=System.Threading.Volatile.Read(ref friendJoinedSequence),
-        HostEnabled=host.Enabled,JoinEnabled=join.Enabled,StopEnabled=stop.Enabled,SetupEnabled=import.Enabled,
+        VerifyingSession=sessionVerification!=null,HostEnabled=host.Enabled,JoinEnabled=join.Enabled,StopEnabled=stop.Enabled,SetupEnabled=import.Enabled,
         GameReady=Directory.Exists(TestDirectory()),SteamReady=dll.Text.Length>0,Active=busy||relay!=null||launcher!=null,
         Lobby=lobby.Text,Activity=activity==null?"":activity.Text,Log=log.Text,SteamPath=dll.Text,
-        Resolution=resolution.SelectedItem as string,GameLanguage=language.SelectedIndex,DisplayMode=displayMode.SelectedIndex,
+        Resolution=resolution.SelectedItem as string,DisplayMode=displayMode.SelectedIndex,
         Resolutions=resolution.Items.Cast<object>().Select(x=>x.ToString()).ToArray()};}
     public async Task UiHost(){if(!offline)await StartSession(true);}
     public async Task UiJoin(string code){if(offline)return;lobby.Text=code;await StartSession(false);}
     public async Task UiStop(){await StopSession();}
     public void UiImport(){if(!offline)InvokeOnClick(import,EventArgs.Empty);}
-    public async Task UiVerify(){if(offline)return;await Work(async()=>{var m=Manifest.Load();string test=TestDirectory();var result=await Task.Run(()=>m.Verify(test,Note));Note(UiText.Format("verified",result.language));RefreshStatus();});}
+    public async Task UiVerify(){if(offline)return;await Work(async()=>{var m=Manifest.Load();string test=TestDirectory();var result=await Task.Run(()=>m.Verify(test,Note,shutdown.Token));Note(UiText.Format("verified",result.language));RefreshStatus();});}
     public void UiBrowseSteam(){if(!offline)InvokeOnClick(browse,EventArgs.Empty);}
     public void UiSetLanguage(string code){foreach(LanguageItem item in uiLanguage.Items)if(item.Code==code){uiLanguage.SelectedItem=item;break;}}
-    public void UiSetGameLanguage(int index){if(index>=0&&index<language.Items.Count)language.SelectedIndex=index;}
     public void UiSetDisplay(int index){if(index>=0&&index<displayMode.Items.Count)displayMode.SelectedIndex=index;}
     public void UiSetResolution(string value){if(resolution.Items.Contains(value))resolution.SelectedItem=value;}
-    public async Task<bool> UiClose(){cancelRequested=true;await StopSession();return !busy&&relay==null&&launcher==null;}
+    public async Task<bool> UiClose(){
+        shutdown.Cancel();
+        await StopSession();
+        while(busy||stopping)await Task.Delay(25);
+        if(gameMonitor!=null)await gameMonitor;
+        if(relayWatcher!=null)await relayWatcher;
+        return relay==null&&launcher==null;
+    }
     public async void StartBackgroundDiscovery(){
         if(offline)return;
         // Create the hidden backend's marshaling handle without showing its obsolete form.

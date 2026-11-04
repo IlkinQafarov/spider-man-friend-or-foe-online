@@ -19,6 +19,8 @@ BASELINE = "5c85b8c90c60b6d615a1aa50ae95d7b0acd32bbbe24bc68c282c136e5e7af42b"
 GENERATED_ART = {'launcher/assets/backgrounds/header.png': 'a5cc36eb6260981ca9d81751ae1b4ac0152594118e45c2ac55bc81d28fc86bd3', 'launcher/assets/backgrounds/host.png': '0c66e3ce8419b1d1a00c9592605d48734f6a59f1bec544d736ae8c1e011e6f0b', 'launcher/assets/backgrounds/join.png': '8ad67becaf639116352cfd45f3775c78a78ef82c0ff0f578f86c613b613dee67'}
 GENERATED_ART["launcher/assets/foreground/title.png"] = "7e60cce03410bbc8d302d8c8e8fc895feb2bfe5665f18111bf839d7d5af9aa12"
 GENERATED_ART.update({'launcher/assets/foreground/host-icon.png': '008e22aad351e387f9a6d749dd7f9de559bba2867615fde4577f5e351e9ee3e5', 'launcher/assets/foreground/join-icon.png': '553931a85b918a069cd79395068c9ced4af2e91e87c00c0b81412301e6cc41c1'})
+GENERATED_ART.update({'launcher/assets/rooftop/distant-city.png': 'f1dd15fb776377b2a80fad80dd31571c340d26592284a3461580115d491a96c8', 'launcher/assets/rooftop/swing-sign.png': '25efde7aa9a1e043d5a6f0f00e31bbec4855fead64e28bedc80f66a61e28c063', 'launcher/assets/rooftop/front.png': '3875e7467f12b4a9401c9c5e58efd259ca2f708775e3ea24882667746f5c4ba2', 'launcher/assets/rooftop/live-plates.png': 'c6ec4e71e016ff45d32cf632ff8b3fdef5b7e5a7a85a1826c844a19573c714ba', 'launcher/assets/rooftop/hover-ink.png': '5303ea42c54618aa44a9275e8bc97132702f0ee75e54bf25bfceb6f35c4d6651', 'launcher/assets/rooftop/hover-signs.png': 'bd2cf342e4fa6a012a10939bdcd89301eabdd093b05857baab4f608dc955bbad', 'launcher/assets/comic-paper/lobby-frame.png': '554fddf47ce96a3bfcdebbe8ae353488adf3e91347cded37353607ee49641bb1', 'launcher/assets/comic-paper/dialog-frame.png': '893077adec70c71e3485d26ab5c352ee96145c4e97b278afebd7db74c3084872'})
+ORIGINAL_UI_BINARY = {'launcher/assets/sounds/arrival.wav': '94965867050410795afccf2e8cbf07e1c9220258321b389f4a40d57144e70f89', 'launcher/assets/sounds/click.wav': '4702e4639701f94a583911927bc99618fd46845f89d88f28fafc128a3832c388', 'launcher/assets/sounds/close.wav': 'a15a1be020b97e039cb58702626fa537054a4e4dc690e3664df29178696b2093', 'launcher/assets/icons/launcher.ico': 'c30b6c2c093ea1ffad61296acbcb1ba53236bf7c4ba511997550a646454cf630'}
 THIRD_PARTY_ICONS = {'launcher/assets/icons/accessibility.svg': '114a9b6983ee20c43d76556bbb5633085a0e082b19464dfa36f1e27768c8f3ea', 'launcher/assets/icons/globe.svg': '82c6b8fa0b8e8d775ec9becd86f74a4e50bff7bee4c81f7362de45348504f14d', 'launcher/assets/icons/LICENSE-lucide.txt': 'b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57', 'launcher/assets/icons/person-standing.svg': '02960f63be14df8543ec5dabf5250a47509c35f177eb90ef9c864aa7acc1161a', 'launcher/assets/icons/settings.svg': '0ae27fd0f81999229e3127ac96c5b32edfea448e291d509e76212b917551d66b', 'launcher/assets/icons/SOURCES.json': '8ca4dacc3cb758081b00ad20f1bf566b611edba73bfb1ee34b3b3e37266e4e2e'}
 TOP = {".gitignore", ".gitattributes", "README.md", "PROTOTYPE.md", "LICENSE"}
 DIRECTORIES = {
@@ -50,7 +52,7 @@ def allowed(name):
     path = Path(name)
     if "\\" in name or path.is_absolute() or any(p in ("", ".", "..") for p in name.split("/")):
         return False
-    return name in THIRD_PARTY_ICONS or name in GENERATED_ART or name in TOP or name in SPECIAL or (
+    return name in ORIGINAL_UI_BINARY or name in THIRD_PARTY_ICONS or name in GENERATED_ART or name in TOP or name in SPECIAL or (
         path.parent.as_posix() in DIRECTORIES and path.suffix in DIRECTORIES[path.parent.as_posix()])
 
 
@@ -60,11 +62,15 @@ def plain(path):
         if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
             raise Rejected("Reparse path rejected")
     info = path.stat()
-    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or not 0 < info.st_size <= (5242880 if path.name in ("header.png", "host.png", "join.png", "title.png", "host-icon.png", "join-icon.png") else 524288):
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or not 0 < info.st_size <= (5242880 if path.relative_to(ROOT).as_posix() in GENERATED_ART else 524288):
         raise Rejected("Nonregular, linked, empty or oversized source file")
 
 
 def inspect_text(name, raw):
+    if name in ORIGINAL_UI_BINARY:
+        if hashlib.sha256(raw).hexdigest() != ORIGINAL_UI_BINARY[name]:
+            raise Rejected("Original UI asset pin mismatch: " + name)
+        return
     if name in THIRD_PARTY_ICONS:
         if hashlib.sha256(raw).hexdigest()!=THIRD_PARTY_ICONS[name]:
             raise Rejected("Pinned Lucide source changed")
@@ -129,6 +135,7 @@ def snapshot(name):
     report = {"schema": "fof-source-publication-v1", "created_utc": datetime.now(timezone.utc).isoformat(),
         "files": inventory, "count": len(inventory), "bytes": sum(f["bytes"] for f in inventory),
         "history_included": False, "binaries_included": False, "game_assets_included": False,
+        "original_ui_binary_assets": sorted(n for n in names if n in ORIGINAL_UI_BINARY),
               "generated_launcher_art_included": sorted(n for n in names if n in GENERATED_ART)}
     with (dest / "inventory.json").open("x", encoding="utf-8") as stream:
         json.dump(report, stream, indent=2)

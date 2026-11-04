@@ -63,6 +63,11 @@ analysis/native/*
 # Original generated launcher art: exactly three replaceable background layers.
 !launcher/assets/
 launcher/assets/*
+!launcher/assets/rooftop/
+launcher/assets/rooftop/*
+!launcher/assets/rooftop/distant-city.png
+!launcher/assets/rooftop/swing-sign.png
+!launcher/assets/rooftop/front.png
 !launcher/assets/backgrounds/
 launcher/assets/backgrounds/*
 !launcher/assets/backgrounds/header.png
@@ -88,3 +93,16 @@ launcher/assets/icons/*
 !launcher/assets/icons/SOURCES.json
 
 !launcher/assets/icons/person-standing.svg
+!launcher/assets/rooftop/live-plates.png
+!launcher/assets/sounds/
+!launcher/assets/sounds/*.wav
+!launcher/assets/settings/
+!launcher/assets/settings/relay-workbench.png
+!launcher/assets/rooftop/hover-ink.png
+!launcher/assets/rooftop/hover-signs.png
+!launcher/assets/icons/launcher.ico
+
+!launcher/assets/comic-paper/
+launcher/assets/comic-paper/*
+!launcher/assets/comic-paper/lobby-frame.png
+!launcher/assets/comic-paper/dialog-frame.png

@@ -657,6 +657,8 @@ def run(args):
     no_reparse(results)
     result = no_reparse(results / name, new=True)
     result.mkdir()
+    languages = ("English","English") if args.stock_dvd_pair else LANGUAGES
+    folders = ("english","english-peer") if args.stock_dvd_pair else tuple(x.lower() for x in languages)
     boxes = [ROOT / ("run-play-lifecycle-" + name + "-" + seat) for seat in SEATS]
     records = [ROOT / "compatibility" / ("qa-play-lifecycle-" + name + "-" + seat + ".json") for seat in SEATS]
     launcher_logs = [result / (seat + "-launcher.log") for seat in SEATS]
@@ -728,9 +730,9 @@ def run(args):
         if hashlib.sha256((ROOT / "compatibility" / "baseline.json").read_bytes()).hexdigest() != BASELINE:
             raise Failed("Unpinned compatibility baseline")
         clean = {k: v for k, v in os.environ.items() if not k.upper().startswith("COOP_PROBE_")}
-        for i, language in enumerate(LANGUAGES):
+        for i, language in enumerate(languages):
             process = popen([sys.executable, str(ROOT / "compatibility" / "preflight.py"), "verify",
-                "--game-dir", str(ROOT / "test" / language.lower()), "--output", str(records[i])],
+                "--game-dir", str(ROOT / "test" / folders[i]), "--output", str(records[i])],
                 result / (SEATS[i] + "-preflight.log"), clean, SEATS[i] + "-preflight")
             last_report = 0
             while process.poll() is None:
@@ -782,7 +784,7 @@ def run(args):
             event("FAKE_INTERNET", one_way_delay_ms=args.net_delay_ms, jitter_ms=args.net_jitter_ms, stall_every_s=args.net_stall_every, stall_ms=args.net_stall_ms)
         for i, seat in enumerate(SEATS):
             process = popen([str(ROOT / "probe" / "native-launcher.exe"), "--play",
-                str(ROOT / "test" / LANGUAGES[i].lower() / "Game.exe"), str(boxes[i])],
+                str(ROOT / "test" / folders[i] / "Game.exe"), str(boxes[i])],
                 launcher_logs[i], environment(os.environ, seat, not args.quiet, args.campaign, args.deferred_connect > 0 or args.join_at_hub,
                             slot_profiles[i] if slot_test else host_profile if (args.join_at_hub or args.together) and seat == "host" else None, args.hub_spawn,
                             args.skip_cutscenes == "both" or (args.skip_cutscenes == "host" and seat == "host"),
@@ -807,7 +809,9 @@ def run(args):
                 if len(matches) > 1:
                     raise Failed(seat + ": duplicate owned HOOK_READY")
                 if matches and games[i] is None:
-                    games[i] = api.capture(int(matches[0][0]), launchers[i], ROOT / "test" / LANGUAGES[i].lower() / "Game.exe")
+                    if args.stock_dvd_pair and matches[0][1] != "b9130323b5d842cf11672aac440c5f880ab637d83c99b720cf110baa81feb129":
+                        raise Failed(seat + ": native launcher did not run the stock DVD executable")
+                    games[i] = api.capture(int(matches[0][0]), launchers[i], ROOT / "test" / folders[i] / "Game.exe")
                     summary["game_pids"][i] = games[i]["pid"]
                     event("OWNED_GAME_CAPTURED", seat=seat)
                 probe_text = text(boxes[i] / "probe.log")
@@ -872,7 +876,7 @@ def run(args):
                 launcher_logs[1] = result / "peer2-launcher.log"
                 games[1] = None
                 launchers[1] = popen([str(ROOT / "probe" / "native-launcher.exe"), "--play",
-                    str(ROOT / "test" / LANGUAGES[1].lower() / "Game.exe"), str(boxes[1])],
+                    str(ROOT / "test" / folders[1] / "Game.exe"), str(boxes[1])],
                     launcher_logs[1], environment(os.environ, "peer", not args.quiet, args.campaign, True, None,
                         skip_nis=args.skip_cutscenes == "both", auto_together=not args.no_auto_together,
                         net_port=peer_port, live_join=args.live_join), "peer2-launcher")
@@ -1553,6 +1557,7 @@ def selftest():
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--stock-dvd-pair", action="store_true", help="Require the stock English DVD executable for both seats, in test/english and test/english-peer")
     parser.add_argument("--name")
     parser.add_argument("--seconds", type=int, default=240)
     parser.add_argument("--frames", type=int, default=300)
